@@ -1,6 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:lumaberth/src/connect.dart';
 import 'package:lumaberth/src/home.dart';
 import 'package:lumaberth/src/store.dart';
 
@@ -21,18 +26,37 @@ void main() {
         'dev.fluttercommunity.plus/connectivity_status',
       );
       messenger.setMockMethodCallHandler(channel, (_) async => null);
-      await tester.pumpWidget(MaterialApp(home: AlbumHome(EmptyStore())));
-      await tester.pumpAndSettle();
-      expect(find.text('连接我的 GitHub'), findsOneWidget);
-      await tester.tap(find.text('连接我的 GitHub'));
-      await tester.pumpAndSettle();
-      expect(find.byType(TextField), findsNothing);
-      expect(find.textContaining('安装包尚未配置'), findsOneWidget);
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-      expect(find.text('连接我的 GitHub'), findsOneWidget);
-      await tester.pumpWidget(const SizedBox());
-      await tester.pumpAndSettle();
+      final client = MockClient((request) async {
+        expect(request.url.toString(), 'https://github.com/login/device/code');
+        expect(request.bodyFields['client_id'], 'Iv23li13AQFhUby41bqD');
+        return http.Response(
+          jsonEncode({
+            'device_code': 'test-device',
+            'user_code': 'DEMO-1234',
+            'interval': 5,
+            'expires_in': 900,
+          }),
+          200,
+        );
+      });
+      await http.runWithClient(() async {
+        await tester.pumpWidget(MaterialApp(home: AlbumHome(EmptyStore())));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('连接我的 GitHub'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(
+          tester.widget<ConnectPage>(find.byType(ConnectPage)).appSlug,
+          'lumaberth',
+        );
+        expect(find.text('DEMO-1234'), findsOneWidget);
+        expect(find.byType(TextField), findsNothing);
+        await tester.pageBack();
+        await tester.pumpAndSettle();
+        expect(find.text('连接我的 GitHub'), findsOneWidget);
+        await tester.pumpWidget(const SizedBox());
+        await tester.pump(const Duration(seconds: 5));
+      }, () => client);
       messenger.setMockMethodCallHandler(channel, null);
     });
   }

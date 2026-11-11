@@ -15,7 +15,9 @@ flutter run -d <Android设备ID>
 
 首次使用：点「连接我的 GitHub」，在应用中复制设备码并前往 GitHub 确认登录。已有授权的私库可以直接选择；新用户可创建照片专用私库（选择 Private 并开启 Add a README），再在 GitHub 选择 Only select repositories，仅授权该私库。回到应用确认账号和库名，点「确认使用」即进入相册首页。安卓用户可在首页选择照片或备份手机已有照片，确认数量和大小后才加入队列；自动备份新照片可以单独开启。
 
-维护者配置：注册 GitHub App，开启 Device Flow 和过期用户令牌，授予 Contents 读写权限。供其他用户使用的版本需要允许其他账号安装。在运行或打包时传入 `--dart-define=GITHUB_CLIENT_ID=公开的ClientID --dart-define=GITHUB_APP_SLUG=安装名`（安装名取自 `github.com/apps/<安装名>`）。GitHub Actions 的构建读取同名仓库变量。分发前请确认两项都有值；未配置的安装包会提示获取已配置版本。
+发行版默认使用 [LumaBerth GitHub App](https://github.com/apps/lumaberth)（所有者 `suikiiovo`）。从此版本源码运行 `flutter build apk --release` 或 `flutter build windows --release` 即会带上正式 App 的公开标识。使用者登录自己的 GitHub 并选择授权的私库即可。打包 Windows 版时请分发整个 Release 输出目录，正式发布 Android 版前请配置长期使用的签名密钥（项目当前默认使用调试签名）。
+
+需要使用自己的 GitHub App 时，注册并开启 Device Flow 和过期用户令牌，授予 Contents 读写权限，然后同时传入 `--dart-define=GITHUB_CLIENT_ID=你的公开ClientID` 与 `--dart-define=GITHUB_APP_SLUG=你的安装名`。GitHub Actions 也支持同名仓库变量，两项都留空时使用正式 App。
 
 ## 使用
 
