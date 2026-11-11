@@ -40,17 +40,19 @@ List<Json> decodeIndex(String raw) {
   final batch = jsonDecode(raw) as Json;
   if (batch['version'] != 1) throw const FormatException('相册目录版本不受支持');
   return (batch['photos'] as List).cast<Json>().map((photo) {
+    final size = int.tryParse('${photo['size']}');
     if (photo['id'] is! String ||
         !RegExp(r'^[0-9a-f-]{36}$').hasMatch(photo['id']) ||
         photo['name'] is! String ||
-        int.tryParse('${photo['size']}') == null ||
+        size == null ||
+        size < 0 ||
         photo['original'] is! int ||
         photo['thumbnail'] is! int ||
         !RegExp(r'^[0-9a-f]{64}$').hasMatch('${photo['sha256']}') ||
         DateTime.tryParse('${photo['takenAt']}') == null) {
       throw const FormatException('相册目录记录不完整');
     }
-    return photo;
+    return {...photo, 'size': size};
   }).toList();
 }
 

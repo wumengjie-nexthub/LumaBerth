@@ -605,6 +605,29 @@ void main() {
     expect(await store.jobs('1-2'), isEmpty);
   });
 
+  test('旧目录中使用字符串的大小可显示并导出，负数拒绝刷新', () async {
+    await engine.backupOne(job);
+    final photo = (await store.photos('1-2')).single;
+    final key = remote.indexes.keys.single;
+    void setSize(dynamic size) {
+      remote.indexes[key] = base64Encode(
+        utf8.encode(encodeIndex({...photo, 'size': size})),
+      );
+    }
+
+    setSize('3');
+    await engine.refresh();
+    final loaded = (await store.photos('1-2')).single;
+    expect(loaded['size'], 3);
+    expect(
+      await (await engine.download(loaded, thumbnail: false)).readAsBytes(),
+      [1, 2, 3],
+    );
+    setSize('-1');
+    await expectLater(engine.refresh(), throwsFormatException);
+    expect((await store.photos('1-2')).single['size'], 3);
+  });
+
   test('普通照片按两个附件分组，空仓库 1200 张', () {
     final groups = <int>[0];
     for (var i = 0; i < 1200; i++) {
