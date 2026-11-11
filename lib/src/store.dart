@@ -234,7 +234,7 @@ class Store {
       throw StateError('${input['name']} 必须小于 2 GiB');
     }
     final id = const Uuid().v4();
-    final snapshot = staged(id, 'original');
+    final snapshot = stagedOriginal({...input, 'id': id});
     var retained = false;
     try {
       await source.copy(snapshot.path);
@@ -259,7 +259,7 @@ class Store {
             }
             if (previous['sha256'] == null) {
               // A pre-upgrade pending job has only its path and has never verified any bytes.
-              await snapshot.copy(staged(previous['id'], 'original').path);
+              await snapshot.copy(stagedOriginal(previous).path);
               await t.update(
                 'jobs',
                 {

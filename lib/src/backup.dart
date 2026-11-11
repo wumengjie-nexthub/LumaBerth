@@ -250,12 +250,20 @@ class Backup {
   Future<void> backupOne(Json job) async {
     final id = job['id'] as String;
     final resumeIndex = job['original'] != null && job['thumbnail'] != null;
-    final originalFile = store.stagedOriginal(job);
+    var originalFile = store.stagedOriginal(job);
     if (!resumeIndex) {
-      // Older and newly selected snapshots initially use the extensionless staging name.
       final legacy = store.staged(id, 'original');
-      if (legacy.path != originalFile.path && await legacy.exists()) {
-        await legacy.rename(originalFile.path);
+      if (legacy.path != originalFile.path &&
+          !await originalFile.exists() &&
+          await legacy.exists()) {
+        if (job['sha256'] == null) {
+          await legacy.rename(
+            originalFile.path,
+          ); // The shell metadata reader needs the extension.
+        } else {
+          originalFile =
+              legacy; // Already prepared, possibly open by another reader.
+        }
       }
       if (job['sha256'] == null) await _prepare(job, originalFile);
       var group =

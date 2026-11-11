@@ -248,7 +248,7 @@ void main() {
     final saved = (await store.jobs('1-2')).single;
     expect(saved['stage'], '待写入目录');
     expect(remote.assets.length, 2);
-    await store.stagedOriginal(job).delete();
+    await store.staged(job['id'], 'original').delete();
     await store.staged(job['id'], 'jpg').delete();
     remote.failCommit = false;
     await engine.backupOne(saved);
@@ -265,7 +265,7 @@ void main() {
     remote.failCommit = true;
     await expectLater(engine.backupOne(job), throwsA(isA<ApiError>()));
     remote.failCommit = false;
-    final original = store.stagedOriginal(job);
+    final original = store.staged(job['id'], 'original');
     await original.delete();
     // A directory occupying the file path makes file deletion fail on both platforms.
     final occupied = await Directory(original.path).create();
@@ -325,16 +325,8 @@ void main() {
         .where((j) => j['source'] == file.path)
         .toList();
     expect(versions, hasLength(2));
-    expect(await store.staged(versions[0]['id'], 'original').readAsBytes(), [
-      1,
-      2,
-      3,
-    ]);
-    expect(await store.staged(versions[1]['id'], 'original').readAsBytes(), [
-      3,
-      2,
-      1,
-    ]);
+    expect(await store.stagedOriginal(versions[0]).readAsBytes(), [1, 2, 3]);
+    expect(await store.stagedOriginal(versions[1]).readAsBytes(), [3, 2, 1]);
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(media, (MethodCall call) async {
