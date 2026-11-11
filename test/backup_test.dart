@@ -439,6 +439,29 @@ void main() {
     expect(remote.deletedAssets, [703, 701]);
     expect((await store.photos('1-2')).map((p) => p['id']), [job['id']]);
   });
+  test('刷新遇到坏目录时完整保留旧相册和去重记录，成功后同时切换', () async {
+    await engine.backupOne(job);
+    await engine.refresh();
+    final photo = (await store.photos('1-2')).single;
+    final original = await store.db.query('album');
+    remote.indexes.clear();
+    String key(String id) => '${engine.root}/contents/${indexPath(id)}';
+    String encoded(String data) => base64Encode(utf8.encode(data));
+    const b = '12000000-0000-4000-8000-000000000002';
+    const c = '12000000-0000-4000-8000-000000000003';
+    remote.indexes[key(b)] = encoded(encodeIndex({...photo, 'id': b}));
+    remote.indexes[key(c)] = encoded('invalid');
+    await expectLater(engine.refresh(), throwsFormatException);
+    expect(await store.db.query('album'), original);
+    expect((await store.jobs('1-2')).single['stage'], '已备份');
+    remote.indexes[key(c)] = encoded(encodeIndex({...photo, 'id': c}));
+    await engine.refresh();
+    expect(
+      (await store.photos('1-2')).map((p) => p['id']),
+      unorderedEquals([b, c]),
+    );
+  });
+
   test('普通照片按两个附件分组，空仓库 1200 张', () {
     final groups = <int>[0];
     for (var i = 0; i < 1200; i++) {

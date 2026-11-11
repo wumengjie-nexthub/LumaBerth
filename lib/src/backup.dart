@@ -472,31 +472,41 @@ class Backup {
       where: 'target=?',
       whereArgs: [target],
     );
-    final previous = {for (final row in old) row['path']: row['sha']};
+    final previous = {for (final row in old) row['path']: row};
+    final changed = <String, Json>{};
     for (final entry in remote.entries) {
-      if (previous[entry.key] == entry.value) continue;
+      if (previous[entry.key]?['sha'] == entry.value) continue;
       final blob = await github.json('GET', '$root/git/blobs/${entry.value}');
       final data = utf8.decode(
         base64Decode((blob['content'] as String).replaceAll('\n', '')),
       );
       decodeIndex(data);
-      await store.db.insert('album', {
+      changed[entry.key] = {
         'target': target,
         'path': entry.key,
         'sha': entry.value,
         'data': data,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      };
     }
     await store.db.transaction((t) async {
+      final batch = t.batch();
+      for (final row in changed.values) {
+        batch.insert(
+          'album',
+          row,
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
       for (final path in previous.keys.where(
         (key) => !remote.containsKey(key),
       )) {
-        await t.delete(
+        batch.delete(
           'album',
           where: 'target=? AND path=?',
           whereArgs: [target, path],
         );
       }
+      await batch.commit(noResult: true);
     });
   });
 
