@@ -29,11 +29,18 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = providers.environmentVariable("LUMABERTH_KEYSTORE").orNull?.let { file(it) }
+            storePassword = providers.environmentVariable("LUMABERTH_SIGNING_PASSWORD").orNull
+            keyAlias = "lumaberth"
+            keyPassword = storePassword
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }
@@ -46,4 +53,14 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+// AGP may otherwise emit an unsigned artifact when a signing field is absent.
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    doFirst {
+        require(!providers.environmentVariable("LUMABERTH_KEYSTORE").orNull.isNullOrBlank() &&
+            !providers.environmentVariable("LUMABERTH_SIGNING_PASSWORD").orNull.isNullOrBlank()) {
+            "Set LUMABERTH_KEYSTORE and LUMABERTH_SIGNING_PASSWORD for Android release builds."
+        }
+    }
 }

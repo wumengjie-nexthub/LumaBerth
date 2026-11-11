@@ -15,9 +15,17 @@ flutter run -d <Android设备ID>
 
 首次使用：点「连接我的 GitHub」，在应用中复制设备码并前往 GitHub 确认登录。已有授权的私库可以直接选择；新用户可创建照片专用私库（选择 Private 并开启 Add a README），再在 GitHub 选择 Only select repositories，仅授权该私库。回到应用确认账号和库名，点「确认使用」即进入相册首页。安卓用户可在首页选择照片或备份手机已有照片，确认数量和大小后才加入队列；自动备份新照片可以单独开启。
 
-发行版默认使用 [LumaBerth GitHub App](https://github.com/apps/lumaberth)（所有者 `suikiiovo`）。从此版本源码运行 `flutter build apk --release` 或 `flutter build windows --release` 即会带上正式 App 的公开标识。使用者登录自己的 GitHub 并选择授权的私库即可。打包 Windows 版时请分发整个 Release 输出目录，正式发布 Android 版前请配置长期使用的签名密钥（项目当前默认使用调试签名）。
+发行版默认使用 [LumaBerth GitHub App](https://github.com/apps/lumaberth)（所有者 `suikiiovo`）。从此版本源码运行 `flutter build apk --release` 或 `flutter build windows --release` 即会带上正式 App 的公开标识。使用者登录自己的 GitHub 并选择授权的私库即可。
 
 需要使用自己的 GitHub App 时，注册并开启 Device Flow 和过期用户令牌，授予 Contents 读写权限，然后同时传入 `--dart-define=GITHUB_CLIENT_ID=你的公开ClientID` 与 `--dart-define=GITHUB_APP_SLUG=你的安装名`。GitHub Actions 也支持同名仓库变量，两项都留空时使用正式 App。
+
+## 安装与打包
+
+从 [GitHub Releases](https://github.com/wumengjie-nexthub/LumaBerth/releases/latest) 下载对应系统的安装包。Android 11 及以上使用通用 APK，64 位 Windows 使用 Setup.exe。发布页提供两个文件的 SHA-256。
+
+Android 正式包在运行 `flutter build apk --release` 前需要设置 `LUMABERTH_KEYSTORE`（PKCS12 密钥库的绝对路径）和 `LUMABERTH_SIGNING_PASSWORD`（密钥库和别名 `lumaberth` 的密码）。后续更新须复用同一签名密钥并递增 `pubspec.yaml` 中的构建号。官方签名证书 SHA-256 为 `6274ecef5d05b6b6b07fa28f16d74e30799f425d37fca3ab1851bbcd145d06e9`，可用 Android SDK 的 `apksigner verify --print-certs` 核对。自行构建可使用自己的签名。
+
+Windows 在 `flutter build windows --release` 后，用 Inno Setup 7 编译 `windows/installer.iss`。传入 `/DAppVersion=版本号` 和 `/DVCRedistDir=当前 MSVC 版本的 x64 Microsoft.VC*.CRT 目录`。产物位于 `build/dist`，包含 Flutter 数据、插件和 Visual C++ 运行库，按当前用户安装。
 
 ## 使用
 
