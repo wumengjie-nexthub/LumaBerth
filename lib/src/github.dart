@@ -274,7 +274,30 @@ class Github {
       final response = await _send('POST', url, file: file);
       asset = jsonDecode(await response.stream.bytesToString()) as Json;
     }
-    if (asset['state'] != 'uploaded' ||
+    return _verifyAsset(root, asset, name, size, digest);
+  }
+
+  Future<void> verifySavedAsset(
+    String root,
+    int id,
+    String name,
+    int size,
+    String digest,
+  ) async {
+    final asset = await json('GET', '$root/releases/assets/$id') as Json;
+    if (asset['id'] != id) throw StateError('远端附件 ID 不一致：$name');
+    await _verifyAsset(root, asset, name, size, digest);
+  }
+
+  Future<int> _verifyAsset(
+    String root,
+    Json asset,
+    String name,
+    int size,
+    String digest,
+  ) async {
+    if (asset['name'] != name ||
+        asset['state'] != 'uploaded' ||
         asset['size'] != size ||
         asset['id'] is! int) {
       throw StateError('附件尚未通过状态与大小校验：$name');
@@ -295,25 +318,33 @@ class Github {
         binary: true,
       )).stream.timeout(const Duration(seconds: 60));
 
-  Future<void> putIndex(
+  // False means a confirmed remote deletion has superseded this upload.
+  Future<bool> putIndex(
     String root,
     String branch,
     String path,
-    String data,
-  ) async {
+    String data, {
+    Future<void> Function()? verifySavedAssets,
+  }) async {
     final dest = '$root/contents/$path';
     final encoded = base64Encode(utf8.encode(data));
-    Future<bool> matches() async {
+    Future<bool?> published() async {
       final found = await optional(dest, query: {'ref': branch});
-      if (found == null) return false;
-      if ((found['content'] as String).replaceAll('\n', '') != encoded) {
+      if (found == null) return null;
+      final content = (found['content'] as String).replaceAll('\n', '');
+      if (content != encoded) {
+        final marker = deletedPhoto(utf8.decode(base64Decode(content)));
+        if (marker != null && indexPath(marker['id']) == path) return false;
         throw StateError('远端批次内容冲突，已保留本机队列');
       }
       return true;
     }
 
-    if (await matches()) return;
     for (var attempt = 0; ; attempt++) {
+      final existing = await published();
+      if (existing == false) return false;
+      await verifySavedAssets?.call();
+      if (existing == true) return true;
       try {
         await json(
           'PUT',
@@ -324,10 +355,11 @@ class Github {
             'content': encoded,
           },
         );
-        return;
+        return true;
       } catch (e) {
         if (e is ApiError && e.retryAt != null) rethrow;
-        if (await matches()) return;
+        final result = await published();
+        if (result != null) return result;
         if (e is! ApiError || e.status != 409 || attempt >= 2) rethrow;
       }
     }

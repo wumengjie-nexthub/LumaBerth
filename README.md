@@ -25,7 +25,7 @@ flutter run -d <Android设备ID>
 
 ## 跨端目录 v1
 
-默认分支的索引路径为 `photo-album/v1/<UUID前两位>/<照片UUID>.json`。本轮每张静态照片使用一个不可覆盖的批次文件。内容为 UTF-8 JSON，结构如下。
+默认分支的索引路径为 `photo-album/v1/<UUID前两位>/<照片UUID>.json`。每张静态照片占用一个固定的批次路径。内容为 UTF-8 JSON，结构如下。
 
 ```json
 {
@@ -41,6 +41,8 @@ flutter run -d <Android设备ID>
   }]
 }
 ```
+
+确认云端删除时，客户端按目录文件当前的 Git blob SHA 将该路径更新为 `{"version":1,"photos":[],"deleted":{"id":"照片UUID","original":101,"thumbnail":102}}`，然后删除两个附件。读取端将空批次显示为零张照片；上传端遇到同一照片的删除记录时结束旧任务。请保留该路径，使离线设备也能识别删除。
 
 示例中的大小、摘要和附件 ID 仅说明字段类型。时间使用 UTC，优先取可读取的拍摄时间，缺失时使用已知文件时间或导入时间。`original`、`thumbnail` 是对应仓库里的 GitHub Release asset ID。恢复端从默认分支读取目录，以这两个 ID 读取资源。
 

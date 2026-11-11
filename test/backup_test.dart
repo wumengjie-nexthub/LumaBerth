@@ -33,6 +33,8 @@ class Remote {
   final bytes = <int, List<int>>{};
   int uploads = 0, puts = 0, initialOccupancy = 0;
   final downloads = <int>[];
+  final deletedAssets = <int>[];
+  int? failDelete;
   bool loseUpload = false,
       loseCommit = false,
       failCommit = false,
@@ -133,9 +135,15 @@ class Remote {
     if (path.contains('/releases/assets/')) {
       final id = int.parse(path.split('/').last);
       if (request.method == 'DELETE') {
+        deletedAssets.add(id);
+        if (id == failDelete) return response({}, 503);
         bytes.remove(id);
         assets.removeWhere((v) => v['id'] == id);
         return http.Response('', 204);
+      }
+      if (request.headers['accept'] != 'application/octet-stream') {
+        final asset = assets.where((a) => a['id'] == id).firstOrNull;
+        return asset == null ? response({}, 404) : response(asset);
       }
       downloads.add(id);
       return bytes[id] == null
@@ -143,14 +151,20 @@ class Remote {
           : http.Response.bytes(bytes[id]!, 200);
     }
     if (path.contains('/contents/')) {
+      final blob = indexes[path];
+      final indexSha = blob == null ? null : checksum(base64Decode(blob));
       if (request.method == 'GET') {
         return indexes.containsKey(path)
-            ? response({'content': indexes[path], 'sha': 'index-sha'})
+            ? response({'content': indexes[path], 'sha': indexSha})
             : response({}, 404);
       }
       if (request.method == 'DELETE') {
         indexes.remove(path);
         return response({});
+      }
+      final update = jsonDecode(request.body) as Json;
+      if (update['sha'] != indexSha) {
+        return response({}, 422);
       }
       puts++;
       if (failCommit) return response({}, 503);
@@ -314,6 +328,52 @@ void main() {
     final versions = (await store.jobs('1-2'))
         .where((j) => j['source'] == file.path);
     expect(versions.map((j) => j['stage']), ['已备份', '等待备份']);
+  });
+
+  test('目录已提交而本机未收尾，另一台设备删除后重试不能恢复目录', () async {
+    // Save the checkpoint the first device would recover after a crash.
+    await engine.backupOne(job);
+    final saved = jsonDecode(
+      (await store.db.query('jobs')).single['data'] as String,
+    ) as Json;
+    await store.checkpoint(saved, '待写入目录');
+    final otherStore = await Store.open(
+      directory: Directory('${dir.path}/other'),
+    );
+    try {
+      final other = TestBackup(otherStore, remote.transport);
+      await other.refresh();
+      await other.requestRemoval((await otherStore.photos('1-2')).single);
+      await other.run();
+      expect(remote.assets, isEmpty);
+      await engine.run();
+      await other.refresh();
+      expect(await otherStore.photos('1-2'), isEmpty);
+      expect(await store.photos('1-2'), isEmpty);
+      expect(
+        (await store.jobs('1-2')).where((j) => j['stage'] == '已备份'),
+        isEmpty,
+      );
+      expect(remote.uploads, 2);
+    } finally {
+      await otherStore.close();
+    }
+  });
+
+  test('兼容旧端物理删除目录，任一已确认附件缺失均不能补写', () async {
+    remote.failCommit = true;
+    await expectLater(engine.backupOne(job), throwsA(isA<ApiError>()));
+    final saved = (await store.jobs('1-2')).single;
+    remote.failCommit = false;
+    final originals = List<Json>.of(remote.assets);
+    for (final role in ['original', 'thumbnail']) {
+      remote.assets
+        ..clear()
+        ..addAll(originals.where((a) => a['id'] != saved[role]));
+      await expectLater(engine.backupOne(saved), throwsA(isA<ApiError>()));
+      expect(remote.indexes, isEmpty);
+      expect(await store.photos('1-2'), isEmpty);
+    }
   });
 
   test('普通照片按两个附件分组，空仓库 1200 张', () {

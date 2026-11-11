@@ -195,7 +195,8 @@ class Backup {
 
   Future<void> backupOne(Json job) async {
     final id = job['id'] as String;
-    if (job['original'] == null || job['thumbnail'] == null) {
+    final resumeIndex = job['original'] != null && job['thumbnail'] != null;
+    if (!resumeIndex) {
       if (job['sha256'] == null) await _prepare(job);
       var group =
           job['group'] as int? ??
@@ -316,8 +317,40 @@ class Backup {
     };
     final data = encodeIndex(entry);
     final path = indexPath(id);
-    await github.putIndex(root, branch, path, data);
+    final published = await github.putIndex(
+      root,
+      branch,
+      path,
+      data,
+      verifySavedAssets: resumeIndex
+          ? () async {
+              await github.verifySavedAsset(
+                root,
+                job['original'],
+                '$id.original',
+                job['size'],
+                job['sha256'],
+              );
+              await github.verifySavedAsset(
+                root,
+                job['thumbnail'],
+                '$id.thumb.jpg',
+                job['thumbSize'],
+                job['thumbHash'],
+              );
+            }
+          : null,
+    );
     await store.db.transaction((t) async {
+      if (!published) {
+        await t.delete(
+          'album',
+          where: 'target=? AND path=?',
+          whereArgs: [target, path],
+        );
+        await t.delete('jobs', where: 'target=? AND id=?', whereArgs: [target, id]);
+        return;
+      }
       await t.insert('album', {
         'target': target,
         'path': path,
@@ -365,7 +398,7 @@ class Backup {
     await verify();
     for (final row in deletes) {
       await store.workLock.transaction((_) async {
-        if (await waiting() == null) await _remove(row);
+        if (await waiting() == null) await _remove(jsonDecode(row['data'] as String) as Json);
       });
     }
     for (final row in jobs) {
@@ -482,27 +515,30 @@ class Backup {
     }, conflictAlgorithm: ConflictAlgorithm.ignore);
   }
 
-  Future<void> _remove(Map<String, Object?> row) async {
-    final photo = jsonDecode(row['data'] as String) as Json;
-    final dest = '$root/contents/${row['path']}';
+  Future<void> _remove(Json photo) async {
+    final dest = '$root/contents/${photo['path']}';
     final batch = await github.optional(dest, query: {'ref': branch});
+    Json? marker;
     if (batch != null) {
-      final entries = decodeIndex(
-        utf8.decode(
-          base64Decode((batch['content'] as String).replaceAll('\n', '')),
-        ),
+      final raw = utf8.decode(
+        base64Decode((batch['content'] as String).replaceAll('\n', '')),
       );
+      marker = deletedPhoto(raw);
+      final entries = marker == null ? decodeIndex(raw) : [marker];
       if (entries.length != 1 ||
           entries.single['id'] != photo['id'] ||
           entries.single['original'] != photo['original'] ||
           entries.single['thumbnail'] != photo['thumbnail']) {
         throw StateError('目录记录已变化，请刷新后确认');
       }
+    }
+    if (marker == null) {
       await github.json(
-        'DELETE',
+        'PUT',
         dest,
         body: {
-          'sha': batch['sha'],
+          if (batch != null) 'sha': batch['sha'],
+          'content': base64Encode(utf8.encode(encodeDeletion(photo))),
           'message': 'Remove photo batch',
           'branch': branch,
         },
@@ -520,7 +556,7 @@ class Backup {
         await t.delete(
           table,
           where: 'target=? AND path=?',
-          whereArgs: [target, row['path']],
+          whereArgs: [target, photo['path']],
         );
       }
       await t.delete(
