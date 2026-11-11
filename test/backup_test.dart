@@ -35,6 +35,7 @@ class Remote {
   final downloads = <int>[];
   final deletedAssets = <int>[];
   int? failDelete;
+  String defaultBranch = 'main';
   bool loseUpload = false,
       loseCommit = false,
       failCommit = false,
@@ -50,10 +51,12 @@ class Remote {
         'private': true,
         'permissions': {'push': true},
         'full_name': 'user/album',
-        'default_branch': 'main',
+        'default_branch': defaultBranch,
       });
     }
-    if (path.endsWith('/branches/main')) return response({'name': 'main'});
+    if (path.endsWith('/branches/$defaultBranch')) {
+      return response({'name': defaultBranch});
+    }
     if (path.endsWith('/commits/main')) {
       return response({
         'commit': {
@@ -245,9 +248,8 @@ void main() {
     final saved = (await store.jobs('1-2')).single;
     expect(saved['stage'], '待写入目录');
     expect(remote.assets.length, 2);
-    for (final role in ['original', 'jpg']) {
-      await store.staged(job['id'], role).delete();
-    }
+    await store.staged(job['id'], 'original').delete();
+    await store.staged(job['id'], 'jpg').delete();
     remote.failCommit = false;
     await engine.backupOne(saved);
     expect(remote.uploads, 2);
@@ -257,6 +259,51 @@ void main() {
       engine.download(photo, thumbnail: false),
       throwsStateError,
     );
+  });
+
+  test('本地清理失败仍完成备份，下轮只重试清理', () async {
+    remote.failCommit = true;
+    await expectLater(engine.backupOne(job), throwsA(isA<ApiError>()));
+    remote.failCommit = false;
+    final original = store.staged(job['id'], 'original');
+    await original.delete();
+    // A directory occupying the file path makes file deletion fail on both platforms.
+    final occupied = await Directory(original.path).create();
+    expect(await engine.run(), true);
+    expect((await store.jobs('1-2')).single['stage'], '已备份');
+    expect(await store.db.query('staged_cleanup'), hasLength(1));
+    final puts = remote.puts;
+    await occupied.delete();
+    expect(await engine.run(), true);
+    expect(await store.db.query('staged_cleanup'), isEmpty);
+    expect(remote.puts, puts);
+    expect(remote.uploads, 2);
+  });
+
+  test('Windows 覆盖原路径后从所选快照读取拍摄时间', () async {
+    final file = File('${dir.path}/camera.jpg');
+    await file.writeAsBytes([1]);
+    await store.enqueue('1-2', [
+      {'source': file.path, 'name': 'camera.jpg', 'size': 1},
+    ]);
+    await file.writeAsBytes([2]);
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(media, (call) async {
+      final metadata = File(call.arguments['metadata']);
+      expect(metadata.path, endsWith('.jpg'));
+      await File(call.arguments['thumb']).writeAsBytes([3]);
+      return DateTime.utc(
+        (await metadata.readAsBytes()).single == 1 ? 2001 : 2025,
+      ).millisecondsSinceEpoch;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(media, null));
+    await engine.backupOne((await store.jobs('1-2')).last);
+    expect(
+      (await store.photos('1-2')).single['takenAt'],
+      DateTime.utc(2001).toIso8601String(),
+    );
+    expect(remote.bytes[101], [1]);
   });
 
   test('Windows 同名同大小文件覆盖后再选，两份内容各入队一次', () async {
@@ -278,16 +325,8 @@ void main() {
         .where((j) => j['source'] == file.path)
         .toList();
     expect(versions, hasLength(2));
-    expect(await store.staged(versions[0]['id'], 'original').readAsBytes(), [
-      1,
-      2,
-      3,
-    ]);
-    expect(await store.staged(versions[1]['id'], 'original').readAsBytes(), [
-      3,
-      2,
-      1,
-    ]);
+    expect(await store.stagedOriginal(versions[0]).readAsBytes(), [1, 2, 3]);
+    expect(await store.stagedOriginal(versions[1]).readAsBytes(), [3, 2, 1]);
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(media, (MethodCall call) async {
@@ -403,6 +442,26 @@ void main() {
       expect(remote.indexes, isEmpty);
       expect(await store.photos('1-2'), isEmpty);
     }
+  });
+
+  test('确认删除后默认分支变化时保留原附件和请求', () async {
+    await engine.backupOne(job);
+    final photo = (await store.photos('1-2')).single;
+    await engine.requestRemoval(photo);
+    final puts = remote.puts;
+    remote.defaultBranch = 'next';
+    await engine.run();
+    expect(remote.puts, puts);
+    expect(remote.deletedAssets, isEmpty);
+    final held = jsonDecode(
+      (await store.db.query('removals')).single['data'] as String,
+    );
+    expect(held['branch'], 'main');
+    expect(held['confirmAgain'], true);
+    expect(
+      await (await engine.download(photo, thumbnail: false)).readAsBytes(),
+      [1, 2, 3],
+    );
   });
 
   test('单条删除冲突保留远端文件，同轮继续备份，刷新重选后可删除', () async {
@@ -537,6 +596,56 @@ void main() {
       unorderedEquals([b, c]),
     );
     expect(await store.jobs('1-2'), isEmpty);
+  });
+
+  test('旧目录中使用字符串的大小可显示并导出，负数拒绝刷新', () async {
+    await engine.backupOne(job);
+    final photo = (await store.photos('1-2')).single;
+    final key = remote.indexes.keys.single;
+    void setSize(dynamic size) {
+      remote.indexes[key] = base64Encode(
+        utf8.encode(encodeIndex({...photo, 'size': size})),
+      );
+    }
+
+    setSize('3');
+    await engine.refresh();
+    final loaded = (await store.photos('1-2')).single;
+    expect(loaded['size'], 3);
+    expect(
+      await (await engine.download(loaded, thumbnail: false)).readAsBytes(),
+      [1, 2, 3],
+    );
+    setSize('-1');
+    await expectLater(engine.refresh(), throwsFormatException);
+    expect((await store.photos('1-2')).single['size'], 3);
+  });
+
+  test('缩略图缓存为空或解码失败后，可以重新下载替换', () async {
+    await engine.backupOne(job);
+    final photo = (await store.photos('1-2')).single;
+    final cache = await engine.download(photo, thumbnail: true);
+    await cache.writeAsBytes([]);
+    expect(
+      await (await engine.download(photo, thumbnail: true)).readAsBytes(),
+      [4, 5],
+    );
+    await cache.writeAsBytes([0]);
+    expect(
+      await (await engine.download(
+        photo,
+        thumbnail: true,
+        refreshThumbnail: true,
+      )).readAsBytes(),
+      [4, 5],
+    );
+    expect(remote.downloads, [102, 102, 102]);
+    remote.bytes[102] = [];
+    await expectLater(
+      engine.download(photo, thumbnail: true, refreshThumbnail: true),
+      throwsFormatException,
+    );
+    expect(await cache.readAsBytes(), [4, 5]);
   });
 
   test('普通照片按两个附件分组，空仓库 1200 张', () {

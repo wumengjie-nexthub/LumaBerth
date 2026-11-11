@@ -783,23 +783,34 @@ class Thumb extends StatefulWidget {
 
 class _ThumbState extends State<Thumb> {
   late Future<File> file = load();
-  Future<File> load() => widget.backup.download(widget.photo, thumbnail: true);
+  Future<File> load({bool refresh = false, File? invalid}) async {
+    if (invalid != null) await FileImage(invalid).evict();
+    return widget.backup.download(
+      widget.photo,
+      thumbnail: true,
+      refreshThumbnail: refresh,
+    );
+  }
+
+  Widget retry(String reason, [File? invalid]) => IconButton(
+    tooltip: '$reason · 点击重新下载',
+    icon: const Icon(Icons.broken_image_outlined),
+    onPressed: () =>
+        setState(() => file = load(refresh: true, invalid: invalid)),
+  );
+
   @override
   Widget build(BuildContext context) => FutureBuilder<File>(
     future: file,
     builder: (context, v) {
       if (v.hasError) {
-        return IconButton(
-          tooltip: '${readable(v.error!)} · 点击重试',
-          icon: const Icon(Icons.broken_image_outlined),
-          onPressed: () => setState(() => file = load()),
-        );
+        return retry(readable(v.error!));
       }
       if (!v.hasData) return const Center(child: Icon(Icons.image_outlined));
       return Image.file(
         v.requireData,
         fit: widget.fit,
-        errorBuilder: (c, e, s) => const Icon(Icons.broken_image_outlined),
+        errorBuilder: (c, e, s) => retry('缩略图无法解码', v.requireData),
       );
     },
   );

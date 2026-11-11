@@ -95,7 +95,28 @@ class Github {
         () => stop('上传超时，等待核对远端状态'),
       );
       try {
-        return await _check(await client.send(upload));
+        final response = await client.send(upload);
+        // The upload is only acknowledged once the entire JSON response arrives.
+        final bytes = <int>[];
+        final received = Completer<void>();
+        final body = response.stream.listen(
+          bytes.addAll,
+          onError: received.completeError,
+          onDone: received.complete,
+        );
+        try {
+          await Future.any([received.future, abort.future]);
+          if (abort.isCompleted) throw StateError(reason ?? '上传已暂停');
+        } finally {
+          await body.cancel();
+        }
+        return await _check(
+          http.StreamedResponse(
+            Stream.value(bytes),
+            response.statusCode,
+            headers: response.headers,
+          ),
+        );
       } on http.RequestAbortedException {
         throw StateError(reason ?? '上传已暂停');
       } finally {

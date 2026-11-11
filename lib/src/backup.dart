@@ -71,6 +71,9 @@ class Backup {
     if (current['id'] != binding['repo'] || current['private'] != true) {
       throw StateError('仓库身份或可见性已改变，已停止写入');
     }
+    if ((await store.pref('binding'))?['target'] != target) {
+      throw StateError('已断开 GitHub');
+    }
     await store.set('writeAt', DateTime.now().millisecondsSinceEpoch);
   }
 
@@ -176,14 +179,27 @@ class Backup {
       return;
     }
     final next = plainMap(await media.invokeMethod('snapshot'));
-    final rows = await changes(cursor as Json, next);
+    final previous = cursor as Json;
+    final rebuilt = next.keys
+        .where(
+          (volume) =>
+              previous.containsKey(volume) &&
+              previous[volume]['version'] != next[volume]['version'],
+        )
+        .toList();
+    for (final volume in rebuilt) {
+      next.remove(volume);
+    }
+    final rows = await changes(previous, next);
     await store.enqueue(target, rows, automatic: true);
-    await store.set('auto:$target', advanceMediaCursor(cursor, next));
-    await store.set('scanInfo:$target', null);
+    await store.set('auto:$target', advanceMediaCursor(previous, next));
+    await store.set(
+      'scanInfo:$target',
+      rebuilt.isEmpty ? null : '存储卷 ${rebuilt.join('、')} 的媒体库已重建，请重新选择自动备份起点',
+    );
   }
 
-  Future<void> _prepare(Json job) async {
-    final original = store.staged(job['id'], 'original');
+  Future<void> _prepare(Json job, File original) async {
     final thumb = store.staged(job['id'], 'jpg');
     if (job['sha256'] != null &&
         (job['original'] != null || await original.exists()) &&
@@ -206,7 +222,7 @@ class Backup {
       taken = await media.invokeMethod<int>('thumbnail', {
         'source': original.path,
         'thumb': thumb.path,
-        'metadata': source,
+        'metadata': original.path,
       });
     }
     final size = await original.length();
@@ -234,8 +250,22 @@ class Backup {
   Future<void> backupOne(Json job) async {
     final id = job['id'] as String;
     final resumeIndex = job['original'] != null && job['thumbnail'] != null;
+    var originalFile = store.stagedOriginal(job);
     if (!resumeIndex) {
-      if (job['sha256'] == null) await _prepare(job);
+      final legacy = store.staged(id, 'original');
+      if (legacy.path != originalFile.path &&
+          !await originalFile.exists() &&
+          await legacy.exists()) {
+        if (job['sha256'] == null) {
+          await legacy.rename(
+            originalFile.path,
+          ); // The shell metadata reader needs the extension.
+        } else {
+          originalFile =
+              legacy; // Already prepared, possibly open by another reader.
+        }
+      }
+      if (job['sha256'] == null) await _prepare(job, originalFile);
       var group =
           job['group'] as int? ??
           await store.pref('group:$target') as int? ??
@@ -270,7 +300,7 @@ class Backup {
             (a) => a['name'] == '$id.original' || a['name'] == '$id.thumb.jpg',
           )) {
             final original = a['name'] == '$id.original';
-            final file = store.staged(id, original ? 'original' : 'jpg');
+            final file = original ? originalFile : store.staged(id, 'jpg');
             if (!await file.exists()) {
               final sink = file.openWrite();
               try {
@@ -295,11 +325,10 @@ class Backup {
           await store.checkpoint(job, '正在重新分组');
           continue;
         }
-        if ((!names.contains('$id.original') &&
-                !await store.staged(id, 'original').exists()) ||
+        if ((!names.contains('$id.original') && !await originalFile.exists()) ||
             (!names.contains('$id.thumb.jpg') &&
                 !await store.staged(id, 'jpg').exists())) {
-          await _prepare(job);
+          await _prepare(job, originalFile);
         }
         job['group'] = group;
         await store.set('group:$target', group);
@@ -313,7 +342,7 @@ class Backup {
             rel['id'],
             assets,
             '$id.original',
-            store.staged(id, 'original'),
+            originalFile,
             job['size'],
             job['sha256'],
           );
@@ -380,6 +409,10 @@ class Backup {
           : null,
     );
     await store.db.transaction((t) async {
+      await t.insert('staged_cleanup', {
+        'id': id,
+        'name': job['name'],
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
       if (!published) {
         await t.delete(
           'album',
@@ -403,10 +436,25 @@ class Backup {
         whereArgs: [id],
       );
     });
-    for (final role in ['original', 'jpg']) {
-      final file = store.staged(id, role);
-      if (await file.exists()) await file.delete();
+    await _cleanStaged(job);
+  }
+
+  Future<void> _cleanStaged(Json job) async {
+    final id = job['id'] as String;
+    for (final path in {
+      store.stagedOriginal(job).path,
+      store.staged(id, 'original').path,
+      store.staged(id, 'jpg').path,
+    }) {
+      try {
+        await File(path).delete();
+      } on PathNotFoundException {
+        continue;
+      } on FileSystemException {
+        return; // A later queue pass retries cleanup after the file is released.
+      }
     }
+    await store.db.delete('staged_cleanup', where: 'id=?', whereArgs: [id]);
   }
 
   Future<bool> run() async {
@@ -415,6 +463,9 @@ class Backup {
     await store.set('status:$target', blocked);
     if (blocked != null) return false;
     await store.workLock.transaction((_) async {
+      for (final job in await store.db.query('staged_cleanup')) {
+        await _cleanStaged(job);
+      }
       if ((await store.pref('binding'))?['target'] != target) return;
       try {
         await discover();
@@ -566,12 +617,21 @@ class Backup {
     });
   });
 
-  Future<File> download(Json photo, {required bool thumbnail}) async {
+  Future<File> download(
+    Json photo, {
+    required bool thumbnail,
+    bool refreshThumbnail = false,
+  }) async {
     final id = photo[thumbnail ? 'thumbnail' : 'original'] as int;
     final cache = Directory(p.join(store.dir.path, 'thumbs', target));
     await cache.create(recursive: true);
     final file = File(p.join(cache.path, '$id.jpg'));
-    if (thumbnail && await file.exists()) return file;
+    if (thumbnail &&
+        !refreshThumbnail &&
+        await file.exists() &&
+        await file.length() > 0) {
+      return file;
+    }
     final temp = File(p.join(cache.path, '${const Uuid().v4()}.part'));
     try {
       final stream = await github.assetStream(root, id);
@@ -581,7 +641,10 @@ class Backup {
       } finally {
         await sink.close();
       }
-      if (thumbnail) return await temp.rename(file.path);
+      if (thumbnail) {
+        if (await temp.length() == 0) throw const FormatException('缩略图为空，请重试');
+        return await temp.rename(file.path);
+      }
       if (await temp.length() != photo['size'] ||
           await fileHash(temp) != photo['sha256']) {
         throw StateError('原图大小或 SHA-256 不一致，未导出');
@@ -598,7 +661,7 @@ class Backup {
       (_) => store.db.insert('removals', {
         'target': target,
         'path': photo['path'],
-        'data': jsonEncode(photo),
+        'data': jsonEncode({...photo, 'branch': branch}),
       }, conflictAlgorithm: ConflictAlgorithm.replace),
     );
   }
@@ -623,29 +686,39 @@ class Backup {
   }
 
   Future<void> _remove(Json photo) async {
+    if (photo['branch'] != null && photo['branch'] != branch) {
+      await _removalError(photo, '默认分支已变化，请刷新相册并重新确认删除', confirmAgain: true);
+      return;
+    }
     final dest = '$root/contents/${photo['path']}';
     final batch = await github.optional(dest, query: {'ref': branch});
-    Json? marker;
-    if (batch != null) {
-      final raw = utf8.decode(
-        base64Decode((batch['content'] as String).replaceAll('\n', '')),
+    if (batch == null) {
+      await _removalError(
+        photo,
+        '当前分支找不到目录记录，请刷新相册并重新确认删除',
+        confirmAgain: true,
       );
-      marker = deletedPhoto(raw);
-      final entries = marker == null ? decodeIndex(raw) : [marker];
-      if (entries.length != 1 ||
-          entries.single['id'] != photo['id'] ||
-          entries.single['original'] != photo['original'] ||
-          entries.single['thumbnail'] != photo['thumbnail']) {
-        await _removalError(photo, '目录已变化，请刷新相册并重新确认删除', confirmAgain: true);
-        return;
-      }
+      return;
+    }
+    final raw = utf8.decode(
+      base64Decode((batch['content'] as String).replaceAll('\n', '')),
+    );
+    final marker = deletedPhoto(raw);
+    final entries = marker == null ? decodeIndex(raw) : [marker];
+    if ((photo['branch'] == null && marker == null) ||
+        entries.length != 1 ||
+        entries.single['id'] != photo['id'] ||
+        entries.single['original'] != photo['original'] ||
+        entries.single['thumbnail'] != photo['thumbnail']) {
+      await _removalError(photo, '目录已变化，请刷新相册并重新确认删除', confirmAgain: true);
+      return;
     }
     if (marker == null) {
       await github.json(
         'PUT',
         dest,
         body: {
-          if (batch != null) 'sha': batch['sha'],
+          'sha': batch['sha'],
           'content': base64Encode(utf8.encode(encodeDeletion(photo))),
           'message': 'Remove photo batch',
           'branch': branch,

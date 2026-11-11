@@ -46,6 +46,9 @@ class Store {
       await t.execute(
         'CREATE TABLE IF NOT EXISTS removals (target TEXT NOT NULL, path TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(target,path))',
       );
+      await t.execute(
+        'CREATE TABLE IF NOT EXISTS staged_cleanup (id TEXT PRIMARY KEY, name TEXT NOT NULL)',
+      );
       // Later metadata edits must not automatically restore a user-deleted backup.
       await t.execute(
         'CREATE TABLE IF NOT EXISTS deleted_media (target TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(target,source))',
@@ -115,13 +118,17 @@ class Store {
       DateTime.now().millisecondsSinceEpoch +
       (tokens['expires_in'] as int? ?? 28800) * 1000;
   Future<void> disconnect() async {
+    final target = await tokenLock.transaction((_) async {
+      final binding = await pref('binding');
+      await set('binding', null);
+      await vault.delete(key: 'github-session');
+      return binding?['target'] as String?;
+    });
+    // Active uploads observe the cleared binding while we wait for the worker to exit.
     await workLock.transaction((_) async {
-      await tokenLock.transaction((_) async {
-        final binding = await pref('binding');
-        if (binding != null) await set('auto:${binding['target']}', null);
-        await set('binding', null);
-        await vault.delete(key: 'github-session');
-      });
+      if (target != null && (await pref('binding'))?['target'] != target) {
+        await set('auto:$target', null);
+      }
     });
   }
 
@@ -227,7 +234,7 @@ class Store {
       throw StateError('${input['name']} 必须小于 2 GiB');
     }
     final id = const Uuid().v4();
-    final snapshot = staged(id, 'original');
+    final snapshot = stagedOriginal({...input, 'id': id});
     var retained = false;
     try {
       await source.copy(snapshot.path);
@@ -252,7 +259,7 @@ class Store {
             }
             if (previous['sha256'] == null) {
               // A pre-upgrade pending job has only its path and has never verified any bytes.
-              await snapshot.copy(staged(previous['id'], 'original').path);
+              await snapshot.copy(stagedOriginal(previous).path);
               await t.update(
                 'jobs',
                 {
@@ -326,6 +333,16 @@ class Store {
       (a, b) => (b['takenAt'] as String).compareTo(a['takenAt'] as String),
     );
     return result;
+  }
+
+  File stagedOriginal(Json job) {
+    final extension = p.windows.extension(job['name'] as String);
+    final role =
+        Platform.isWindows &&
+            RegExp(r'^\.[a-zA-Z0-9]{1,10}$').hasMatch(extension)
+        ? 'original$extension'
+        : 'original';
+    return staged(job['id'], role);
   }
 
   File staged(String id, String role) => File(p.join(dir.path, '$id.$role'));
