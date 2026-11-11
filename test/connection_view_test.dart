@@ -26,11 +26,8 @@ void main() {
       expect(find.text('连接我的 GitHub'), findsOneWidget);
       await tester.tap(find.text('连接我的 GitHub'));
       await tester.pumpAndSettle();
-      expect(find.text('获取设备码'), findsOneWidget);
-      expect(find.text('GitHub App Client ID'), findsOneWidget);
-      await tester.tap(find.text('获取设备码'));
-      await tester.pumpAndSettle();
-      expect(find.text('请输入 GitHub App 的公开 Client ID'), findsOneWidget);
+      expect(find.byType(TextField), findsNothing);
+      expect(find.textContaining('安装包尚未配置'), findsOneWidget);
       await tester.pageBack();
       await tester.pumpAndSettle();
       expect(find.text('连接我的 GitHub'), findsOneWidget);

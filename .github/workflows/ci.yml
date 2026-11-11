@@ -10,6 +10,8 @@ permissions:
   contents: read
 
 env:
+  GITHUB_CLIENT_ID: ${{ vars.GITHUB_CLIENT_ID }}
+  GITHUB_APP_SLUG: ${{ vars.GITHUB_APP_SLUG }}
   FLUTTER_VERSION: '3.47.9'
 
 jobs:
@@ -25,7 +27,7 @@ jobs:
       - run: flutter pub get --enforce-lockfile
       - run: flutter analyze --no-pub
       - run: flutter test --no-pub
-      - run: flutter build windows --debug --no-pub
+      - run: flutter build windows --debug --no-pub "--dart-define=GITHUB_CLIENT_ID=$env:GITHUB_CLIENT_ID" "--dart-define=GITHUB_APP_SLUG=$env:GITHUB_APP_SLUG"
 
   android:
     name: Android build
@@ -41,4 +43,4 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
       - run: flutter pub get --enforce-lockfile
-      - run: flutter build apk --debug --target-platform android-arm64 --no-pub
+      - run: flutter build apk --debug --target-platform android-arm64 --no-pub "--dart-define=GITHUB_CLIENT_ID=$GITHUB_CLIENT_ID" "--dart-define=GITHUB_APP_SLUG=$GITHUB_APP_SLUG"

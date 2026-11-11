@@ -13,9 +13,9 @@ flutter run -d windows
 flutter run -d <Android设备ID>
 ```
 
-首次运行，在「连接我的 GitHub」输入维护者注册的 GitHub App 的公开 Client ID 和安装名。也可在运行命令后加上 `--dart-define=GITHUB_CLIENT_ID=...` 和 `--dart-define=GITHUB_APP_SLUG=...`。安装名是 `github.com/apps/<安装名>` 中的最后一段。
+首次使用：点「连接我的 GitHub」，在应用中复制设备码并前往 GitHub 确认登录。已有授权的私库可以直接选择；新用户可创建照片专用私库（选择 Private 并开启 Add a README），再在 GitHub 选择 Only select repositories，仅授权该私库。回到应用确认账号和库名，点「确认使用」即进入相册首页。安卓用户可在首页选择照片或备份手机已有照片，确认数量和大小后才加入队列；自动备份新照片可以单独开启。
 
-维护者注册时开启 Device Flow 和过期用户令牌，授予 Contents 读写权限。用户将 App 安装到照片专用私有仓库，创建仓库时勾选初始化 README。客户端展示设备码，用户在 GitHub 完成授权后选择仓库并确认。访问令牌和刷新令牌由系统安全存储保存。
+维护者配置：注册 GitHub App，开启 Device Flow 和过期用户令牌，授予 Contents 读写权限。供其他用户使用的版本需要允许其他账号安装。在运行或打包时传入 `--dart-define=GITHUB_CLIENT_ID=公开的ClientID --dart-define=GITHUB_APP_SLUG=安装名`（安装名取自 `github.com/apps/<安装名>`）。GitHub Actions 的构建读取同名仓库变量。分发前请确认两项都有值；未配置的安装包会提示获取已配置版本。
 
 ## 使用
 
