@@ -17,6 +17,25 @@ String encodeIndex(Json entry) =>
       'version': 1,
       'photos': [entry],
     })}\n';
+// A v1 reader sees an empty batch. The retained path prevents a late create
+// from restoring a photo after another device has confirmed its deletion.
+String encodeDeletion(Json photo) => jsonEncode({
+  'version': 1,
+  'photos': <Json>[],
+  'deleted': {
+    for (final k in ['id', 'original', 'thumbnail']) k: photo[k],
+  },
+});
+Json? deletedPhoto(String raw) {
+  final batch = jsonDecode(raw) as Json;
+  if (batch['version'] == 1 &&
+      batch['photos'] is List &&
+      (batch['photos'] as List).isEmpty) {
+    return batch['deleted'] as Json?;
+  }
+  return null;
+}
+
 List<Json> decodeIndex(String raw) {
   final batch = jsonDecode(raw) as Json;
   if (batch['version'] != 1) throw const FormatException('相册目录版本不受支持');

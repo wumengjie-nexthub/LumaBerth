@@ -21,6 +21,27 @@ String readable(Object e) => e is PlatformException
     ? (e.message ?? e.code)
     : e.toString().replaceFirst('Bad state: ', '');
 
+// Only mounted volumes advance. The floor is the user's original opt-in boundary.
+Json advanceMediaCursor(Json previous, Json mounted) => {
+  ...previous,
+  for (final v in mounted.entries)
+    v.key: {
+      ...v.value as Json,
+      'floor':
+          previous[v.key]?['floor'] ??
+          previous[v.key]?['generation'] ??
+          v.value['generation'],
+    },
+};
+
+Json initialMediaCursor(Json mounted, {required bool includeExisting}) => {
+  for (final v in mounted.entries)
+    v.key: {
+      'version': v.value['version'],
+      'generation': includeExisting ? -1 : v.value['generation'],
+    },
+};
+
 class Backup {
   Backup(this.store, this.binding, this.client);
   final Store store;
@@ -121,26 +142,43 @@ class Backup {
   }
 
   Future<List<Json>> changes(Json from, Json to) async {
-    final rows =
-        await media.invokeListMethod<dynamic>('scan', {
-          'from': from,
-          'to': to,
-        }) ??
-        [];
+    final windows = <String, dynamic>{};
+    for (final v in to.entries) {
+      final last = from[v.key];
+      // A newly mounted volume starts at this snapshot.
+      if (last == null) continue;
+      if (last['version'] != v.value['version']) {
+        throw PlatformException(code: 'media', message: '系统媒体库已重建，请重新选择自动备份起点');
+      }
+      if (last['generation'] == v.value['generation']) continue;
+      windows[v.key] = [
+        last['floor'] ?? last['generation'],
+        last['generation'],
+        v.value['generation'],
+      ].map((n) => n.toString()).toList();
+    }
+    if (windows.isEmpty) return [];
+    final rows = (await media.invokeListMethod<dynamic>('scan', {
+      'windows': windows,
+      // Publication changes generation_modified; editing a pre-opt-in item must not import it.
+      'selection':
+          'generation_added > ? AND generation_modified > ? '
+          'AND generation_modified <= ? AND is_pending=0 AND is_trashed=0',
+    }))!;
     return rows.map(plainMap).toList();
   }
 
   Future<void> discover() async {
     final cursor = await store.pref('auto:$target');
-    if (!Platform.isAndroid || cursor == null) return;
+    if (cursor == null) return;
     if (await media.invokeMethod('permission') != 'full') {
       await store.set('scanInfo:$target', '相册权限已改变，请重新授权以继续自动发现');
       return;
     }
     final next = plainMap(await media.invokeMethod('snapshot'));
     final rows = await changes(cursor as Json, next);
-    await store.enqueue(target, rows);
-    await store.set('auto:$target', next);
+    await store.enqueue(target, rows, automatic: true);
+    await store.set('auto:$target', advanceMediaCursor(cursor, next));
     await store.set('scanInfo:$target', null);
   }
 
@@ -162,7 +200,9 @@ class Backup {
         'thumb': thumb.path,
       });
     } else {
-      await File(source).copy(original.path);
+      if (job['selectedSha256'] == null || !await original.exists()) {
+        await File(source).copy(original.path);
+      }
       taken = await media.invokeMethod<int>('thumbnail', {
         'source': original.path,
         'thumb': thumb.path,
@@ -172,7 +212,8 @@ class Backup {
     final size = await original.length();
     if (size >= maxAssetBytes) throw StateError('原片必须小于 2 GiB');
     final hash = await fileHash(original);
-    if (job['sha256'] != null && job['sha256'] != hash) {
+    final expected = job['sha256'] ?? job['selectedSha256'];
+    if (expected != null && expected != hash) {
       throw StateError('原片内容已变化，请选择原始版本');
     }
     job.addAll({
@@ -192,7 +233,8 @@ class Backup {
 
   Future<void> backupOne(Json job) async {
     final id = job['id'] as String;
-    if (job['original'] == null || job['thumbnail'] == null) {
+    final resumeIndex = job['original'] != null && job['thumbnail'] != null;
+    if (!resumeIndex) {
       if (job['sha256'] == null) await _prepare(job);
       var group =
           job['group'] as int? ??
@@ -313,8 +355,42 @@ class Backup {
     };
     final data = encodeIndex(entry);
     final path = indexPath(id);
-    await github.putIndex(root, branch, path, data);
+    final published = await github.putIndex(
+      root,
+      branch,
+      path,
+      data,
+      verifySavedAssets: resumeIndex
+          ? () async {
+              await github.verifySavedAsset(
+                root,
+                job['original'],
+                '$id.original',
+                job['size'],
+                job['sha256'],
+              );
+              await github.verifySavedAsset(
+                root,
+                job['thumbnail'],
+                '$id.thumb.jpg',
+                job['thumbSize'],
+                job['thumbHash'],
+              );
+            }
+          : null,
+    );
     await store.db.transaction((t) async {
+      if (!published) {
+        await t.delete(
+          'album',
+          where: 'target=? AND path=?',
+          whereArgs: [target, path],
+        );
+        final batch = t.batch();
+        store.forgetJob(batch, target, id);
+        await batch.commit(noResult: true);
+        return;
+      }
       await t.insert('album', {
         'target': target,
         'path': path,
@@ -355,6 +431,7 @@ class Backup {
     );
     final deletes = await store.db.query(
       'removals',
+      columns: ['path'],
       where: 'target=?',
       whereArgs: [target],
     );
@@ -362,7 +439,26 @@ class Backup {
     await verify();
     for (final row in deletes) {
       await store.workLock.transaction((_) async {
-        if (await waiting() == null) await _remove(row);
+        if (await waiting() != null) return;
+        final current = await store.db.query(
+          'removals',
+          where: 'target=? AND path=?',
+          whereArgs: [target, row['path']],
+        );
+        if (current.isEmpty) return;
+        final photo = jsonDecode(current.single['data'] as String) as Json;
+        if (photo['confirmAgain'] == true) return;
+        try {
+          await _remove(photo);
+        } catch (e) {
+          if (e is SocketException ||
+              e is http.ClientException ||
+              e is ApiError && (e.status == 401 || e.retryAt != null)) {
+            rethrow;
+          }
+          success = false;
+          await _removalError(photo, readable(e));
+        }
       });
     }
     for (final row in jobs) {
@@ -416,31 +512,57 @@ class Backup {
       where: 'target=?',
       whereArgs: [target],
     );
-    final previous = {for (final row in old) row['path']: row['sha']};
+    final previous = {for (final row in old) row['path']: row};
+    final changed = <String, Json>{};
     for (final entry in remote.entries) {
-      if (previous[entry.key] == entry.value) continue;
+      if (previous[entry.key]?['sha'] == entry.value) continue;
       final blob = await github.json('GET', '$root/git/blobs/${entry.value}');
       final data = utf8.decode(
         base64Decode((blob['content'] as String).replaceAll('\n', '')),
       );
       decodeIndex(data);
-      await store.db.insert('album', {
+      changed[entry.key] = {
         'target': target,
         'path': entry.key,
         'sha': entry.value,
         'data': data,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      };
     }
     await store.db.transaction((t) async {
+      final batch = t.batch();
+      for (final row in changed.values) {
+        batch.insert(
+          'album',
+          row,
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
       for (final path in previous.keys.where(
         (key) => !remote.containsKey(key),
       )) {
-        await t.delete(
+        batch.delete(
           'album',
           where: 'target=? AND path=?',
           whereArgs: [target, path],
         );
       }
+      // Reconcile even if an earlier app version already cached the deletion marker.
+      final completed = await t.query(
+        'jobs',
+        columns: ['id'],
+        where: 'target=? AND stage=?',
+        whereArgs: [target, '已备份'],
+      );
+      for (final row in completed) {
+        final id = row['id'] as String;
+        final path = indexPath(id);
+        final cached = changed[path] ?? previous[path];
+        if (!remote.containsKey(path) ||
+            deletedPhoto(cached!['data'] as String)?['id'] == id) {
+          store.forgetJob(batch, target, id);
+        }
+      }
+      await batch.commit(noResult: true);
     });
   });
 
@@ -472,34 +594,59 @@ class Backup {
   }
 
   Future<void> requestRemoval(Json photo) async {
-    await store.db.insert('removals', {
-      'target': target,
-      'path': photo['path'],
-      'data': jsonEncode(photo),
-    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    await store.workLock.transaction(
+      (_) => store.db.insert('removals', {
+        'target': target,
+        'path': photo['path'],
+        'data': jsonEncode(photo),
+      }, conflictAlgorithm: ConflictAlgorithm.replace),
+    );
   }
 
-  Future<void> _remove(Map<String, Object?> row) async {
-    final photo = jsonDecode(row['data'] as String) as Json;
-    final dest = '$root/contents/${row['path']}';
+  Future<void> _removalError(
+    Json photo,
+    String error, {
+    bool confirmAgain = false,
+  }) async {
+    await store.db.update(
+      'removals',
+      {
+        'data': jsonEncode({
+          ...photo,
+          'error': error,
+          'confirmAgain': confirmAgain,
+        }),
+      },
+      where: 'target=? AND path=?',
+      whereArgs: [target, photo['path']],
+    );
+  }
+
+  Future<void> _remove(Json photo) async {
+    final dest = '$root/contents/${photo['path']}';
     final batch = await github.optional(dest, query: {'ref': branch});
+    Json? marker;
     if (batch != null) {
-      final entries = decodeIndex(
-        utf8.decode(
-          base64Decode((batch['content'] as String).replaceAll('\n', '')),
-        ),
+      final raw = utf8.decode(
+        base64Decode((batch['content'] as String).replaceAll('\n', '')),
       );
+      marker = deletedPhoto(raw);
+      final entries = marker == null ? decodeIndex(raw) : [marker];
       if (entries.length != 1 ||
           entries.single['id'] != photo['id'] ||
           entries.single['original'] != photo['original'] ||
           entries.single['thumbnail'] != photo['thumbnail']) {
-        throw StateError('目录记录已变化，请刷新后确认');
+        await _removalError(photo, '目录已变化，请刷新相册并重新确认删除', confirmAgain: true);
+        return;
       }
+    }
+    if (marker == null) {
       await github.json(
-        'DELETE',
+        'PUT',
         dest,
         body: {
-          'sha': batch['sha'],
+          if (batch != null) 'sha': batch['sha'],
+          'content': base64Encode(utf8.encode(encodeDeletion(photo))),
           'message': 'Remove photo batch',
           'branch': branch,
         },
@@ -517,14 +664,12 @@ class Backup {
         await t.delete(
           table,
           where: 'target=? AND path=?',
-          whereArgs: [target, row['path']],
+          whereArgs: [target, photo['path']],
         );
       }
-      await t.delete(
-        'jobs',
-        where: 'id=? AND target=?',
-        whereArgs: [photo['id'], target],
-      );
+      final batch = t.batch();
+      store.forgetJob(batch, target, photo['id']);
+      await batch.commit(noResult: true);
     });
   }
 }

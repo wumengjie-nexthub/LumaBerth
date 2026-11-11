@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -35,7 +36,7 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
       automatic = false,
       loaded = false;
   String? notice, status, scanInfo;
-  int removals = 0;
+  List<Json> removals = [];
   Timer? timer;
   StreamSubscription<List<ConnectivityResult>>? connectivity;
 
@@ -53,7 +54,7 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
         if (!running &&
             !paused &&
             (jobs.any((j) => j['stage'] != '已备份' && j['error'] == null) ||
-                removals > 0 ||
+                removals.any((r) => r['error'] == null) ||
                 status != null)) {
           unawaited(runQueue());
         }
@@ -127,13 +128,13 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
     final info = await store.pref('status:$target') as String?;
     final scan = await store.pref('scanInfo:$target') as String?;
     final pending = target == null
-        ? 0
+        ? <Json>[]
         : (await store.db.query(
             'removals',
-            columns: ['path'],
+            columns: ['data'],
             where: 'target=?',
             whereArgs: [target],
-          )).length;
+          )).map((r) => jsonDecode(r['data'] as String) as Json).toList();
     if (!mounted || backup != b) return;
     setState(() {
       photos = data;
@@ -269,8 +270,9 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
         throw StateError('自动备份需要完整照片权限。你仍可用系统选择器手动导入。');
       }
       final end = plainMap(await media.invokeMethod('snapshot'));
+      final start = initialMediaCursor(end, includeExisting: choice);
       if (choice) {
-        final rows = await b.changes({}, end);
+        final rows = await b.changes(start, end);
         final bytes = rows.fold<int>(0, (n, v) => n + (v['size'] as int? ?? 0));
         if (!mounted ||
             !await confirm(
@@ -282,7 +284,7 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
         }
         await store.enqueue(b.target, rows);
       }
-      await store.set('auto:${b.target}', end);
+      await store.set('auto:${b.target}', advanceMediaCursor(start, end));
       await store.set('consent:${b.target}', true);
       await schedule(store);
     } else {
@@ -640,7 +642,8 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
     ],
   );
   Widget queue() {
-    final pending = jobs.where((j) => j['stage'] != '已备份').toList();
+    final uploads = jobs.where((j) => j['stage'] != '已备份').toList();
+    final pending = [...removals, ...uploads];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -651,8 +654,8 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
             children: [
               Text('备份进度', style: Theme.of(context).textTheme.headlineMedium),
               const SizedBox(height: 8),
-              Text('已备份 ${photos.length} 张 · 待完成 ${pending.length} 张'),
-              if (removals > 0) Text('待删除 $removals 张'),
+              Text('已备份 ${photos.length} 张 · 待完成 ${uploads.length} 张'),
+              if (removals.isNotEmpty) Text('待删除 ${removals.length} 张'),
               Text(paused ? '队列已暂停' : status ?? (running ? '正在检查队列' : '队列就绪')),
               Wrap(
                 spacing: 8,
@@ -680,8 +683,27 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
                   j['error'] == null ? Icons.schedule : Icons.error_outline,
                 ),
                 title: Text(j['name']),
+                trailing: j['confirmAgain'] == true
+                    ? TextButton(
+                        onPressed: busy
+                            ? null
+                            : () => guard(() async {
+                                final target = backup!.target;
+                                await store.db.delete(
+                                  'removals',
+                                  where: 'target=? AND path=? AND data=?',
+                                  whereArgs: [target, j['path'], jsonEncode(j)],
+                                );
+                                await reload();
+                              }),
+                        child: const Text('取消删除请求'),
+                      )
+                    : null,
                 subtitle: Text(
-                  [j['stage'], if (j['error'] != null) j['error']].join(' · '),
+                  [
+                    i < removals.length ? '待删除' : j['stage'],
+                    if (j['error'] != null) j['error'],
+                  ].join(' · '),
                 ),
               );
             },

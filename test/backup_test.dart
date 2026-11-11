@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:lumaberth/src/backup.dart';
@@ -32,6 +33,8 @@ class Remote {
   final bytes = <int, List<int>>{};
   int uploads = 0, puts = 0, initialOccupancy = 0;
   final downloads = <int>[];
+  final deletedAssets = <int>[];
+  int? failDelete;
   bool loseUpload = false,
       loseCommit = false,
       failCommit = false,
@@ -132,9 +135,15 @@ class Remote {
     if (path.contains('/releases/assets/')) {
       final id = int.parse(path.split('/').last);
       if (request.method == 'DELETE') {
+        deletedAssets.add(id);
+        if (id == failDelete) return response({}, 503);
         bytes.remove(id);
         assets.removeWhere((v) => v['id'] == id);
         return http.Response('', 204);
+      }
+      if (request.headers['accept'] != 'application/octet-stream') {
+        final asset = assets.where((a) => a['id'] == id).firstOrNull;
+        return asset == null ? response({}, 404) : response(asset);
       }
       downloads.add(id);
       return bytes[id] == null
@@ -142,14 +151,20 @@ class Remote {
           : http.Response.bytes(bytes[id]!, 200);
     }
     if (path.contains('/contents/')) {
+      final blob = indexes[path];
+      final indexSha = blob == null ? null : checksum(base64Decode(blob));
       if (request.method == 'GET') {
         return indexes.containsKey(path)
-            ? response({'content': indexes[path], 'sha': 'index-sha'})
+            ? response({'content': indexes[path], 'sha': indexSha})
             : response({}, 404);
       }
       if (request.method == 'DELETE') {
         indexes.remove(path);
         return response({});
+      }
+      final update = jsonDecode(request.body) as Json;
+      if (update['sha'] != indexSha) {
+        return response({}, 422);
       }
       puts++;
       if (failCommit) return response({}, 503);
@@ -243,6 +258,287 @@ void main() {
       throwsStateError,
     );
   });
+
+  test('Windows 同名同大小文件覆盖后再选，两份内容各入队一次', () async {
+    final file = File('${dir.path}/same.jpg');
+    final input = {
+      'name': 'same.jpg',
+      'source': file.path,
+      'size': 3,
+      'time': 1,
+    };
+    await file.writeAsBytes([1, 2, 3]);
+    await store.enqueue('1-2', [input]);
+    await file.writeAsBytes([3, 2, 1]);
+    await Future.wait([
+      store.enqueue('1-2', [input]),
+      store.enqueue('1-2', [input]),
+    ]);
+    final versions = (await store.jobs('1-2'))
+        .where((j) => j['source'] == file.path)
+        .toList();
+    expect(versions, hasLength(2));
+    expect(await store.staged(versions[0]['id'], 'original').readAsBytes(), [
+      1,
+      2,
+      3,
+    ]);
+    expect(await store.staged(versions[1]['id'], 'original').readAsBytes(), [
+      3,
+      2,
+      1,
+    ]);
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(media, (MethodCall call) async {
+      await File(call.arguments['thumb']).writeAsBytes([4, 5]);
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(media, null));
+    await file.delete();
+    for (final version in versions) {
+      await engine.backupOne(version);
+    }
+    expect(remote.bytes[101], [1, 2, 3]);
+    expect(remote.bytes[103], [3, 2, 1]);
+  });
+
+  test('旧版已完成队列仍去重，覆盖为新内容后能再次入队', () async {
+    final file = File('${dir.path}/legacy.jpg');
+    await file.writeAsBytes([1, 2, 3]);
+    final input = {'name': 'legacy.jpg', 'source': file.path, 'size': 3};
+    await store.db.insert('jobs', {
+      'id': 'legacy',
+      'target': '1-2',
+      'source': file.path,
+      'stage': '已备份',
+      'data': jsonEncode({
+        ...input,
+        'id': 'legacy',
+        'sha256': await fileHash(file),
+      }),
+    });
+    await store.enqueue('1-2', [input]);
+    expect(
+      (await store.jobs('1-2')).where((j) => j['source'] == file.path),
+      hasLength(1),
+    );
+    await file.writeAsBytes([3, 2, 1]);
+    await store.enqueue('1-2', [input]);
+    final versions = (await store.jobs('1-2'))
+        .where((j) => j['source'] == file.path);
+    expect(versions.map((j) => j['stage']), ['已备份', '等待备份']);
+  });
+
+  test('目录已提交而本机未收尾，另一台设备删除后重试不能恢复目录', () async {
+    // Save the checkpoint the first device would recover after a crash.
+    await engine.backupOne(job);
+    final saved = jsonDecode(
+      (await store.db.query('jobs')).single['data'] as String,
+    ) as Json;
+    await store.checkpoint(saved, '待写入目录');
+    final otherStore = await Store.open(
+      directory: Directory('${dir.path}/other'),
+    );
+    try {
+      final other = TestBackup(otherStore, remote.transport);
+      await other.refresh();
+      await other.requestRemoval((await otherStore.photos('1-2')).single);
+      await other.run();
+      expect(remote.assets, isEmpty);
+      await engine.run();
+      await other.refresh();
+      expect(await otherStore.photos('1-2'), isEmpty);
+      expect(await store.photos('1-2'), isEmpty);
+      expect(
+        (await store.jobs('1-2')).where((j) => j['stage'] == '已备份'),
+        isEmpty,
+      );
+      expect(remote.uploads, 2);
+    } finally {
+      await otherStore.close();
+    }
+  });
+
+  test('删除已写入目录但附件清理失败，旧任务停止，重新运行可清完附件', () async {
+    await engine.backupOne(job);
+    final pending = jsonDecode(
+      (await store.db.query('jobs')).single['data'] as String,
+    ) as Json;
+    await store.checkpoint(pending, '待写入目录');
+    final otherStore = await Store.open(
+      directory: Directory('${dir.path}/other'),
+    );
+    try {
+      final other = TestBackup(otherStore, remote.transport);
+      await other.refresh();
+      final photo = (await otherStore.photos('1-2')).single;
+      await other.requestRemoval(photo);
+      remote.failDelete = photo['thumbnail'];
+      expect(await other.run(), isFalse);
+      expect(remote.assets, hasLength(2));
+      await engine.run();
+      expect(await store.photos('1-2'), isEmpty);
+      expect(await store.jobs('1-2'), isEmpty);
+      remote.failDelete = null;
+      await other.run();
+      expect(remote.assets, isEmpty);
+      expect(await otherStore.db.query('removals'), isEmpty);
+    } finally {
+      await otherStore.close();
+    }
+  });
+
+  test('兼容旧端物理删除目录，任一已确认附件缺失均不能补写', () async {
+    remote.failCommit = true;
+    await expectLater(engine.backupOne(job), throwsA(isA<ApiError>()));
+    final saved = (await store.jobs('1-2')).single;
+    remote.failCommit = false;
+    final originals = List<Json>.of(remote.assets);
+    for (final role in ['original', 'thumbnail']) {
+      remote.assets
+        ..clear()
+        ..addAll(originals.where((a) => a['id'] != saved[role]));
+      await expectLater(engine.backupOne(saved), throwsA(isA<ApiError>()));
+      expect(remote.indexes, isEmpty);
+      expect(await store.photos('1-2'), isEmpty);
+    }
+  });
+
+  test('单条删除冲突保留远端文件，同轮继续备份，刷新重选后可删除', () async {
+    final old = {
+      ...job,
+      'id': '55555555-5555-4555-8555-555555555555',
+      'original': 701,
+      'thumbnail': 702,
+    };
+    final path = indexPath(old['id']);
+    final updated = {...old, 'thumbnail': 703};
+    remote.indexes['${engine.root}/contents/$path'] = base64Encode(
+      utf8.encode(encodeIndex(updated)),
+    );
+    await engine.requestRemoval({...old, 'path': path});
+    await engine.run();
+    expect((await store.jobs('1-2')).single['stage'], '已备份');
+    expect(
+      remote.indexes['${engine.root}/contents/$path'],
+      base64Encode(utf8.encode(encodeIndex(updated))),
+    );
+    final held = jsonDecode(
+      (await store.db.query('removals')).single['data'] as String,
+    );
+    expect(held['confirmAgain'], true);
+    await engine.run();
+    expect(remote.deletedAssets, isEmpty);
+    await engine.refresh();
+    await engine.requestRemoval(
+      (await store.photos('1-2')).singleWhere((p) => p['id'] == old['id']),
+    );
+    await engine.run();
+    expect(await store.db.query('removals'), isEmpty);
+    expect(remote.deletedAssets, [703, 701]);
+    expect((await store.photos('1-2')).map((p) => p['id']), [job['id']]);
+  });
+  for (final physical in [false, true]) {
+    test('另一设备删除后，刷新允许同一原片重新备份（旧端物理删除：$physical）', () async {
+      final file = File('${dir.path}/original.jpg');
+      await file.writeAsBytes([1, 2, 3]);
+      final input = {'source': file.path, 'name': 'original.jpg', 'size': 3};
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(media, (call) async {
+        await File(call.arguments['thumb']).writeAsBytes([4, 5]);
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(media, null));
+      await store.enqueue('1-2', [input]);
+      Future<List<Json>> versions() async =>
+          (await store.jobs('1-2'))
+              .where((j) => j['source'] == file.path)
+              .toList();
+      final first = (await versions()).single;
+      await engine.backupOne(first);
+      final otherStore = await Store.open(
+        directory: Directory('${dir.path}/other'),
+      );
+      try {
+        final other = TestBackup(otherStore, remote.transport);
+        await other.refresh();
+        await other.requestRemoval((await otherStore.photos('1-2')).single);
+        await other.run();
+      } finally {
+        await otherStore.close();
+      }
+      if (physical) {
+        remote.indexes.clear();
+      } else {
+        // Older versions could cache the tombstone without retiring the completed job.
+        final raw = base64Decode(remote.indexes.values.single);
+        await store.db.update(
+          'album',
+          {'sha': checksum(raw), 'data': utf8.decode(raw)},
+          where: 'target=? AND path=?',
+          whereArgs: ['1-2', indexPath(first['id'])],
+        );
+      }
+      await engine.refresh();
+      expect(await versions(), isEmpty);
+      expect(
+        (await store.jobs('1-2')).single['id'],
+        job['id'],
+      ); // still pending
+      await store.enqueue('1-2', [input]);
+      final fresh = (await versions()).single;
+      expect(fresh['id'], isNot(first['id']));
+      await engine.backupOne(fresh);
+      final photo = (await store.photos('1-2')).single;
+      expect(photo['id'], fresh['id']);
+      expect(remote.bytes[photo['original']], [1, 2, 3]);
+    });
+  }
+
+  test('远端删除后自动扫描不能恢复旧 MediaStore 来源，手动重选仍然有效', () async {
+    final input = {
+      'source': 'content://media/external/images/media/12',
+      'name': 'a.jpg',
+    };
+    await store.enqueue('1-2', [input], automatic: true);
+    final row = (await store.jobs('1-2')).last;
+    await store.checkpoint(row, '已备份');
+    await engine.refresh(); // the confirmed directory contains no such photo
+    await store.enqueue('1-2', [input], automatic: true);
+    expect(
+      (await store.jobs('1-2')).where((j) => j['source'] == input['source']),
+      isEmpty,
+    );
+    await store.enqueue('1-2', [input]);
+    expect((await store.jobs('1-2')).last['source'], input['source']);
+  });
+
+  test('刷新遇到坏目录时完整保留旧相册和去重记录，成功后同时切换', () async {
+    await engine.backupOne(job);
+    await engine.refresh();
+    final photo = (await store.photos('1-2')).single;
+    final original = await store.db.query('album');
+    remote.indexes.clear();
+    String key(String id) => '${engine.root}/contents/${indexPath(id)}';
+    String encoded(String data) => base64Encode(utf8.encode(data));
+    const b = '12000000-0000-4000-8000-000000000002';
+    const c = '12000000-0000-4000-8000-000000000003';
+    remote.indexes[key(b)] = encoded(encodeIndex({...photo, 'id': b}));
+    remote.indexes[key(c)] = encoded('invalid');
+    await expectLater(engine.refresh(), throwsFormatException);
+    expect(await store.db.query('album'), original);
+    expect((await store.jobs('1-2')).single['stage'], '已备份');
+    remote.indexes[key(c)] = encoded(encodeIndex({...photo, 'id': c}));
+    await engine.refresh();
+    expect(
+      (await store.photos('1-2')).map((p) => p['id']),
+      unorderedEquals([b, c]),
+    );
+    expect(await store.jobs('1-2'), isEmpty);
+  });
+
   test('普通照片按两个附件分组，空仓库 1200 张', () {
     final groups = <int>[0];
     for (var i = 0; i < 1200; i++) {

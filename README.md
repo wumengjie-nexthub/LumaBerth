@@ -19,13 +19,13 @@ flutter run -d <Android设备ID>
 
 ## 使用
 
-- **Android**　手动导入使用系统照片选择器，也提供系统文件选择器读取原件。系统照片选择器可能按用户授权隐去位置元数据。全相册自动发现使用 MediaStore 的卷版本和加入代数，需要完整照片权限。开启时可选「从现在开始」，或先查看已有照片的数量和大小再加入队列。WorkManager 在网络和电量条件满足时执行。
+- **Android**　手动导入使用系统照片选择器，也提供系统文件选择器读取原件。系统照片选择器可能按用户授权隐去位置元数据。自动发现使用 MediaStore，需要完整照片权限。每个存储卷独立保存备份起点和扫描进度。相机稍后写完的新照片会在后续扫描入队；拔卡保留进度，首次遇到的新卷从当时开始扫描。开启时可选「从现在开始」，或先查看已有照片的数量和大小再加入队列。WorkManager 在网络和电量条件满足时执行。
 - **Windows**　选择本机文件导入，点击缩略图查看详情或下载原图。勾选多张照片后可批量导出到一个目录，同名文件自动编号。Windows Imaging Component 从原文件生成缩略图，HEIC 等格式需要系统安装对应解码器。退出程序保留队列，下次打开继续。
 - **两端**　相册按时间浏览并按需加载缩略图。备份保留静态文件，原图大小和 SHA-256 校验成功、缩略图上传成功、目录写入成功后才显示「已备份」。来源删除和断开账号均保留远端备份。云端删除在照片详情中单独确认，未完成的删除保存在本机待继续。
 
 ## 跨端目录 v1
 
-默认分支的索引路径为 `photo-album/v1/<UUID前两位>/<照片UUID>.json`。本轮每张静态照片使用一个不可覆盖的批次文件。内容为 UTF-8 JSON，结构如下。
+默认分支的索引路径为 `photo-album/v1/<UUID前两位>/<照片UUID>.json`。每张静态照片占用一个固定的批次路径。内容为 UTF-8 JSON，结构如下。
 
 ```json
 {
@@ -42,6 +42,8 @@ flutter run -d <Android设备ID>
 }
 ```
 
+确认云端删除时，客户端按目录文件当前的 Git blob SHA 将该路径更新为 `{"version":1,"photos":[],"deleted":{"id":"照片UUID","original":101,"thumbnail":102}}`，然后删除两个附件。读取端将空批次显示为零张照片；上传端遇到同一照片的删除记录时结束旧任务。请保留该路径，使离线设备也能识别删除。
+
 示例中的大小、摘要和附件 ID 仅说明字段类型。时间使用 UTC，优先取可读取的拍摄时间，缺失时使用已知文件时间或导入时间。`original`、`thumbnail` 是对应仓库里的 GitHub Release asset ID。恢复端从默认分支读取目录，以这两个 ID 读取资源。
 
 每次安装使用独立的设备 UUID，Release 标签为 `photo-album-<设备UUID>-<组号>`，组号从 1 开始。附件名为 `<照片UUID>.original` 与 `<照片UUID>.thumb.jpg`。写入按实际附件数预留两个位置，响应丢失时按稳定名称核对已有附件。不同设备导入的相同字节也保留各自的照片记录和原文件名。
@@ -49,7 +51,7 @@ flutter run -d <Android设备ID>
 ## 定向验证
 
 ```powershell
-flutter test test/backup_test.dart test/connection_view_test.dart
+flutter test test/backup_test.dart test/media_scan_test.dart test/connection_view_test.dart
 ```
 
 备份测试使用临时 SQLite 数据库和模拟 GitHub 接口，覆盖中断、摘要不符、换组、目录恢复、限流、下载及删除。界面测试覆盖 360 与 1280 像素宽度的首次连接流程。
