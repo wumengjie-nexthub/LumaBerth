@@ -391,6 +391,7 @@ class Backup {
     );
     final deletes = await store.db.query(
       'removals',
+      columns: ['path'],
       where: 'target=?',
       whereArgs: [target],
     );
@@ -398,7 +399,26 @@ class Backup {
     await verify();
     for (final row in deletes) {
       await store.workLock.transaction((_) async {
-        if (await waiting() == null) await _remove(jsonDecode(row['data'] as String) as Json);
+        if (await waiting() != null) return;
+        final current = await store.db.query(
+          'removals',
+          where: 'target=? AND path=?',
+          whereArgs: [target, row['path']],
+        );
+        if (current.isEmpty) return;
+        final photo = jsonDecode(current.single['data'] as String) as Json;
+        if (photo['confirmAgain'] == true) return;
+        try {
+          await _remove(photo);
+        } catch (e) {
+          if (e is SocketException ||
+              e is http.ClientException ||
+              e is ApiError && (e.status == 401 || e.retryAt != null)) {
+            rethrow;
+          }
+          success = false;
+          await _removalError(photo, readable(e));
+        }
       });
     }
     for (final row in jobs) {
@@ -508,11 +528,32 @@ class Backup {
   }
 
   Future<void> requestRemoval(Json photo) async {
-    await store.db.insert('removals', {
-      'target': target,
-      'path': photo['path'],
-      'data': jsonEncode(photo),
-    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    await store.workLock.transaction(
+      (_) => store.db.insert('removals', {
+        'target': target,
+        'path': photo['path'],
+        'data': jsonEncode(photo),
+      }, conflictAlgorithm: ConflictAlgorithm.replace),
+    );
+  }
+
+  Future<void> _removalError(
+    Json photo,
+    String error, {
+    bool confirmAgain = false,
+  }) async {
+    await store.db.update(
+      'removals',
+      {
+        'data': jsonEncode({
+          ...photo,
+          'error': error,
+          'confirmAgain': confirmAgain,
+        }),
+      },
+      where: 'target=? AND path=?',
+      whereArgs: [target, photo['path']],
+    );
   }
 
   Future<void> _remove(Json photo) async {
@@ -529,7 +570,8 @@ class Backup {
           entries.single['id'] != photo['id'] ||
           entries.single['original'] != photo['original'] ||
           entries.single['thumbnail'] != photo['thumbnail']) {
-        throw StateError('目录记录已变化，请刷新后确认');
+        await _removalError(photo, '目录已变化，请刷新相册并重新确认删除', confirmAgain: true);
+        return;
       }
     }
     if (marker == null) {

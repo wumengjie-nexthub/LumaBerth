@@ -360,6 +360,35 @@ void main() {
     }
   });
 
+  test('删除已写入目录但附件清理失败，旧任务停止，重新运行可清完附件', () async {
+    await engine.backupOne(job);
+    final pending = jsonDecode(
+      (await store.db.query('jobs')).single['data'] as String,
+    ) as Json;
+    await store.checkpoint(pending, '待写入目录');
+    final otherStore = await Store.open(
+      directory: Directory('${dir.path}/other'),
+    );
+    try {
+      final other = TestBackup(otherStore, remote.transport);
+      await other.refresh();
+      final photo = (await otherStore.photos('1-2')).single;
+      await other.requestRemoval(photo);
+      remote.failDelete = photo['thumbnail'];
+      expect(await other.run(), isFalse);
+      expect(remote.assets, hasLength(2));
+      await engine.run();
+      expect(await store.photos('1-2'), isEmpty);
+      expect(await store.jobs('1-2'), isEmpty);
+      remote.failDelete = null;
+      await other.run();
+      expect(remote.assets, isEmpty);
+      expect(await otherStore.db.query('removals'), isEmpty);
+    } finally {
+      await otherStore.close();
+    }
+  });
+
   test('兼容旧端物理删除目录，任一已确认附件缺失均不能补写', () async {
     remote.failCommit = true;
     await expectLater(engine.backupOne(job), throwsA(isA<ApiError>()));
@@ -376,6 +405,40 @@ void main() {
     }
   });
 
+  test('单条删除冲突保留远端文件，同轮继续备份，刷新重选后可删除', () async {
+    final old = {
+      ...job,
+      'id': '55555555-5555-4555-8555-555555555555',
+      'original': 701,
+      'thumbnail': 702,
+    };
+    final path = indexPath(old['id']);
+    final updated = {...old, 'thumbnail': 703};
+    remote.indexes['${engine.root}/contents/$path'] = base64Encode(
+      utf8.encode(encodeIndex(updated)),
+    );
+    await engine.requestRemoval({...old, 'path': path});
+    await engine.run();
+    expect((await store.jobs('1-2')).single['stage'], '已备份');
+    expect(
+      remote.indexes['${engine.root}/contents/$path'],
+      base64Encode(utf8.encode(encodeIndex(updated))),
+    );
+    final held = jsonDecode(
+      (await store.db.query('removals')).single['data'] as String,
+    );
+    expect(held['confirmAgain'], true);
+    await engine.run();
+    expect(remote.deletedAssets, isEmpty);
+    await engine.refresh();
+    await engine.requestRemoval(
+      (await store.photos('1-2')).singleWhere((p) => p['id'] == old['id']),
+    );
+    await engine.run();
+    expect(await store.db.query('removals'), isEmpty);
+    expect(remote.deletedAssets, [703, 701]);
+    expect((await store.photos('1-2')).map((p) => p['id']), [job['id']]);
+  });
   test('普通照片按两个附件分组，空仓库 1200 张', () {
     final groups = <int>[0];
     for (var i = 0; i < 1200; i++) {
