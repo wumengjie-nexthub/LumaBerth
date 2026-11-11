@@ -23,6 +23,7 @@ String readable(Object e) => e is PlatformException
 
 // Only mounted volumes advance. The floor is the user's original opt-in boundary.
 Json advanceMediaCursor(Json previous, Json mounted) => {
+  ...previous,
   for (final v in mounted.entries)
     v.key: {
       ...v.value as Json,

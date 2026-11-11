@@ -106,4 +106,24 @@ void main() {
     await backup.discover();
     expect(await sources(), ['content://media/old', 'content://media/camera']);
   });
+  test('拔卡扫描不丢旧游标，新卷从首次挂载起点开始，重建卷不提交游标', () async {
+    mounted = {'phone': volume(6), 'card': volume(10)};
+    await add('before', 'card', 3);
+    // A cursor saved by the previous version has no explicit floor.
+    await store.set('auto:$target', mounted);
+    mounted = {'phone': volume(7)};
+    await backup.discover();
+    expect((await store.pref('auto:$target'))['card']['generation'], 10);
+    await add('offline', 'card', 11);
+    await add('foreign', 'newcard', 4);
+    mounted = {'phone': volume(7), 'card': volume(11), 'newcard': volume(8)};
+    await backup.discover();
+    expect(await sources(), ['content://media/offline']);
+    final current = await store.pref('auto:$target');
+    mounted = {
+      'card': {'version': 'rebuilt', 'generation': 1},
+    };
+    await expectLater(backup.discover(), throwsA(isA<PlatformException>()));
+    expect(await store.pref('auto:$target'), current);
+  });
 }
