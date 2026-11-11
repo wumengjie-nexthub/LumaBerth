@@ -11,14 +11,20 @@ import 'catalog.dart';
 import 'github.dart';
 import 'store.dart';
 
+// An unconfigured build uses the public registration, including CI builds
+// that pass empty repository variables. Custom registrations override the pair.
+const _customClientId = String.fromEnvironment('GITHUB_CLIENT_ID');
+const _customAppSlug = String.fromEnvironment('GITHUB_APP_SLUG');
+const _useOfficialApp = _customClientId == '' && _customAppSlug == '';
+
 enum _RepositoryStep { choose, create, install }
 
 class ConnectPage extends StatefulWidget {
   const ConnectPage(
     this.store, {
     super.key,
-    this.clientId = const String.fromEnvironment('GITHUB_CLIENT_ID'),
-    this.appSlug = const String.fromEnvironment('GITHUB_APP_SLUG'),
+    this.clientId = _useOfficialApp ? 'Iv23li13AQFhUby41bqD' : _customClientId,
+    this.appSlug = _useOfficialApp ? 'lumaberth' : _customAppSlug,
   });
   final Store store;
   final String clientId, appSlug;
