@@ -167,9 +167,20 @@ class Store {
           )
           .toList();
   Future<void> enqueue(String target, List<Json> inputs) async {
+    final unversioned = <Json>[];
+    for (final input in inputs) {
+      if (Platform.isWindows &&
+          p.windows.isAbsolute(input['source']) &&
+          (input['size'] ?? 0) < maxAssetBytes) {
+        await _enqueueWindowsFile(target, input);
+      } else {
+        unversioned.add(input);
+      }
+    }
+    if (unversioned.isEmpty) return;
     await db.transaction((t) async {
       final batch = t.batch();
-      for (final input in inputs) {
+      for (final input in unversioned) {
         final id = const Uuid().v4();
         batch.insert('jobs', {
           'id': id,
@@ -181,6 +192,76 @@ class Store {
       }
       await batch.commit(noResult: true);
     });
+  }
+
+  // Keep the bytes chosen in the picker, even if a camera later reuses the filename.
+  Future<void> _enqueueWindowsFile(String target, Json input) async {
+    final path = input['source'] as String;
+    final source = File(path);
+    if (await source.length() >= maxAssetBytes) {
+      throw StateError('${input['name']} 必须小于 2 GiB');
+    }
+    final id = const Uuid().v4();
+    final snapshot = staged(id, 'original');
+    var retained = false;
+    try {
+      await source.copy(snapshot.path);
+      final size = await snapshot.length();
+      if (size >= maxAssetBytes) {
+        throw StateError('${input['name']} 必须小于 2 GiB');
+      }
+      final hash = await fileHash(snapshot);
+      // The SQL source column is the deduplication key. The original path stays in data.
+      final key = jsonEncode([path, hash]);
+      retained = await workLock.transaction(
+        (_) => db.transaction((t) async {
+          final matches = await t.query(
+            'jobs',
+            where: 'target=? AND source IN (?,?)',
+            whereArgs: [target, key, path],
+          );
+          for (final row in matches) {
+            final previous = jsonDecode(row['data'] as String) as Json;
+            if (row['source'] == key || previous['sha256'] == hash) {
+              return false;
+            }
+            if (previous['sha256'] == null) {
+              // A pre-upgrade pending job has only its path and has never verified any bytes.
+              await snapshot.copy(staged(previous['id'], 'original').path);
+              await t.update(
+                'jobs',
+                {
+                  'source': key,
+                  'data': jsonEncode({
+                    ...previous,
+                    'size': size,
+                    'selectedSha256': hash,
+                  }),
+                },
+                where: 'id=?',
+                whereArgs: [previous['id']],
+              );
+              return false;
+            }
+          }
+          await t.insert('jobs', {
+            'id': id,
+            'target': target,
+            'source': key,
+            'stage': '等待备份',
+            'data': jsonEncode({
+              ...input,
+              'id': id,
+              'size': size,
+              'selectedSha256': hash,
+            }),
+          });
+          return true;
+        }),
+      );
+    } finally {
+      if (!retained && await snapshot.exists()) await snapshot.delete();
+    }
   }
 
   Future<void> checkpoint(Json job, String stage, [String? error]) async {

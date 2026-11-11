@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:lumaberth/src/backup.dart';
@@ -243,6 +244,78 @@ void main() {
       throwsStateError,
     );
   });
+
+  test('Windows 同名同大小文件覆盖后再选，两份内容各入队一次', () async {
+    final file = File('${dir.path}/same.jpg');
+    final input = {
+      'name': 'same.jpg',
+      'source': file.path,
+      'size': 3,
+      'time': 1,
+    };
+    await file.writeAsBytes([1, 2, 3]);
+    await store.enqueue('1-2', [input]);
+    await file.writeAsBytes([3, 2, 1]);
+    await Future.wait([
+      store.enqueue('1-2', [input]),
+      store.enqueue('1-2', [input]),
+    ]);
+    final versions = (await store.jobs('1-2'))
+        .where((j) => j['source'] == file.path)
+        .toList();
+    expect(versions, hasLength(2));
+    expect(await store.staged(versions[0]['id'], 'original').readAsBytes(), [
+      1,
+      2,
+      3,
+    ]);
+    expect(await store.staged(versions[1]['id'], 'original').readAsBytes(), [
+      3,
+      2,
+      1,
+    ]);
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(media, (MethodCall call) async {
+      await File(call.arguments['thumb']).writeAsBytes([4, 5]);
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(media, null));
+    await file.delete();
+    for (final version in versions) {
+      await engine.backupOne(version);
+    }
+    expect(remote.bytes[101], [1, 2, 3]);
+    expect(remote.bytes[103], [3, 2, 1]);
+  });
+
+  test('旧版已完成队列仍去重，覆盖为新内容后能再次入队', () async {
+    final file = File('${dir.path}/legacy.jpg');
+    await file.writeAsBytes([1, 2, 3]);
+    final input = {'name': 'legacy.jpg', 'source': file.path, 'size': 3};
+    await store.db.insert('jobs', {
+      'id': 'legacy',
+      'target': '1-2',
+      'source': file.path,
+      'stage': '已备份',
+      'data': jsonEncode({
+        ...input,
+        'id': 'legacy',
+        'sha256': await fileHash(file),
+      }),
+    });
+    await store.enqueue('1-2', [input]);
+    expect(
+      (await store.jobs('1-2')).where((j) => j['source'] == file.path),
+      hasLength(1),
+    );
+    await file.writeAsBytes([3, 2, 1]);
+    await store.enqueue('1-2', [input]);
+    final versions = (await store.jobs('1-2'))
+        .where((j) => j['source'] == file.path);
+    expect(versions.map((j) => j['stage']), ['已备份', '等待备份']);
+  });
+
   test('普通照片按两个附件分组，空仓库 1200 张', () {
     final groups = <int>[0];
     for (var i = 0; i < 1200; i++) {

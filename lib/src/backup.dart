@@ -162,7 +162,9 @@ class Backup {
         'thumb': thumb.path,
       });
     } else {
-      await File(source).copy(original.path);
+      if (job['selectedSha256'] == null || !await original.exists()) {
+        await File(source).copy(original.path);
+      }
       taken = await media.invokeMethod<int>('thumbnail', {
         'source': original.path,
         'thumb': thumb.path,
@@ -172,7 +174,8 @@ class Backup {
     final size = await original.length();
     if (size >= maxAssetBytes) throw StateError('原片必须小于 2 GiB');
     final hash = await fileHash(original);
-    if (job['sha256'] != null && job['sha256'] != hash) {
+    final expected = job['sha256'] ?? job['selectedSha256'];
+    if (expected != null && expected != hash) {
       throw StateError('原片内容已变化，请选择原始版本');
     }
     job.addAll({
