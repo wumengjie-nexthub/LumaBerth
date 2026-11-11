@@ -35,6 +35,7 @@ class Remote {
   final downloads = <int>[];
   final deletedAssets = <int>[];
   int? failDelete;
+  String defaultBranch = 'main';
   bool loseUpload = false,
       loseCommit = false,
       failCommit = false,
@@ -50,10 +51,11 @@ class Remote {
         'private': true,
         'permissions': {'push': true},
         'full_name': 'user/album',
-        'default_branch': 'main',
+        'default_branch': defaultBranch,
       });
     }
-    if (path.endsWith('/branches/main')) return response({'name': 'main'});
+    if (path.endsWith('/branches/$defaultBranch'))
+      return response({'name': 'main'});
     if (path.endsWith('/commits/main')) {
       return response({
         'commit': {
@@ -447,6 +449,26 @@ void main() {
       expect(remote.indexes, isEmpty);
       expect(await store.photos('1-2'), isEmpty);
     }
+  });
+
+  test('确认删除后默认分支变化时保留原附件和请求', () async {
+    await engine.backupOne(job);
+    final photo = (await store.photos('1-2')).single;
+    await engine.requestRemoval(photo);
+    final puts = remote.puts;
+    remote.defaultBranch = 'next';
+    await engine.run();
+    expect(remote.puts, puts);
+    expect(remote.deletedAssets, isEmpty);
+    final held = jsonDecode(
+      (await store.db.query('removals')).single['data'] as String,
+    );
+    expect(held['branch'], 'main');
+    expect(held['confirmAgain'], true);
+    expect(
+      await (await engine.download(photo, thumbnail: false)).readAsBytes(),
+      [1, 2, 3],
+    );
   });
 
   test('单条删除冲突保留远端文件，同轮继续备份，刷新重选后可删除', () async {

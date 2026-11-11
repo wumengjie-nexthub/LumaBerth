@@ -638,7 +638,7 @@ class Backup {
       (_) => store.db.insert('removals', {
         'target': target,
         'path': photo['path'],
-        'data': jsonEncode(photo),
+        'data': jsonEncode({...photo, 'branch': branch}),
       }, conflictAlgorithm: ConflictAlgorithm.replace),
     );
   }
@@ -663,29 +663,39 @@ class Backup {
   }
 
   Future<void> _remove(Json photo) async {
+    if (photo['branch'] != null && photo['branch'] != branch) {
+      await _removalError(photo, '默认分支已变化，请刷新相册并重新确认删除', confirmAgain: true);
+      return;
+    }
     final dest = '$root/contents/${photo['path']}';
     final batch = await github.optional(dest, query: {'ref': branch});
-    Json? marker;
-    if (batch != null) {
-      final raw = utf8.decode(
-        base64Decode((batch['content'] as String).replaceAll('\n', '')),
+    if (batch == null) {
+      await _removalError(
+        photo,
+        '当前分支找不到目录记录，请刷新相册并重新确认删除',
+        confirmAgain: true,
       );
-      marker = deletedPhoto(raw);
-      final entries = marker == null ? decodeIndex(raw) : [marker];
-      if (entries.length != 1 ||
-          entries.single['id'] != photo['id'] ||
-          entries.single['original'] != photo['original'] ||
-          entries.single['thumbnail'] != photo['thumbnail']) {
-        await _removalError(photo, '目录已变化，请刷新相册并重新确认删除', confirmAgain: true);
-        return;
-      }
+      return;
+    }
+    final raw = utf8.decode(
+      base64Decode((batch['content'] as String).replaceAll('\n', '')),
+    );
+    final marker = deletedPhoto(raw);
+    final entries = marker == null ? decodeIndex(raw) : [marker];
+    if ((photo['branch'] == null && marker == null) ||
+        entries.length != 1 ||
+        entries.single['id'] != photo['id'] ||
+        entries.single['original'] != photo['original'] ||
+        entries.single['thumbnail'] != photo['thumbnail']) {
+      await _removalError(photo, '目录已变化，请刷新相册并重新确认删除', confirmAgain: true);
+      return;
     }
     if (marker == null) {
       await github.json(
         'PUT',
         dest,
         body: {
-          if (batch != null) 'sha': batch['sha'],
+          'sha': batch['sha'],
           'content': base64Encode(utf8.encode(encodeDeletion(photo))),
           'message': 'Remove photo batch',
           'branch': branch,
