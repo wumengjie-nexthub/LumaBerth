@@ -20,50 +20,61 @@ class Store {
   static const vault = FlutterSecureStorage();
   static Future<Store> open({Directory? directory}) async {
     if (Platform.isWindows) sqfliteFfiInit();
-    final factory = Platform.isWindows ? databaseFactoryFfi : databaseFactory;
+    // WorkManager engines must not block the foreground engine's SQLite worker.
+    final factory = Platform.isAndroid || Platform.isWindows
+        ? databaseFactoryFfi
+        : databaseFactory;
     final dir = directory ?? await getApplicationSupportDirectory();
     await dir.create(recursive: true);
-    Future<Database> database(String name) => factory.openDatabase(
-      p.join(dir.path, name),
-      options: OpenDatabaseOptions(
-        singleInstance: false,
-        onConfigure: (db) async {
-          await db.execute('PRAGMA busy_timeout=15000');
-        },
-      ),
+    Future<Database> database(String name, {bool album = false}) =>
+        factory.openDatabase(
+          p.join(dir.path, name),
+          options: OpenDatabaseOptions(
+            singleInstance: false,
+            version: album ? 1 : null,
+            onCreate: album ? _createAlbum : null,
+            onConfigure: (db) async {
+              await db.execute('PRAGMA busy_timeout=15000');
+            },
+          ),
+        );
+    final db = await database('album.sqlite', album: true);
+    Database? work;
+    try {
+      work = await database('work.lock.sqlite');
+      return Store(db, work, await database('auth.lock.sqlite'), dir);
+    } catch (_) {
+      await work?.close();
+      await db.close();
+      rethrow;
+    }
+  }
+
+  // Version zero includes existing albums created before schema versioning.
+  static Future<void> _createAlbum(Database t, int version) async {
+    await t.execute(
+      'CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
     );
-    final db = await database('album.sqlite');
-    await db.transaction((t) async {
-      await t.execute(
-        'CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
-      );
-      await t.execute(
-        'CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, target TEXT NOT NULL, source TEXT NOT NULL, stage TEXT NOT NULL, data TEXT NOT NULL, error TEXT, UNIQUE(target,source))',
-      );
-      await t.execute(
-        'CREATE TABLE IF NOT EXISTS album (target TEXT NOT NULL, path TEXT NOT NULL, sha TEXT, data TEXT NOT NULL, PRIMARY KEY(target,path))',
-      );
-      await t.execute(
-        'CREATE TABLE IF NOT EXISTS removals (target TEXT NOT NULL, path TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(target,path))',
-      );
-      await t.execute(
-        'CREATE TABLE IF NOT EXISTS staged_cleanup (id TEXT PRIMARY KEY, name TEXT NOT NULL)',
-      );
-      // Later metadata edits must not automatically restore a user-deleted backup.
-      await t.execute(
-        'CREATE TABLE IF NOT EXISTS deleted_media (target TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(target,source))',
-      );
-      await t.insert('prefs', {
-        'key': 'device',
-        'value': jsonEncode(const Uuid().v4()),
-      }, conflictAlgorithm: ConflictAlgorithm.ignore);
-    });
-    return Store(
-      db,
-      await database('work.lock.sqlite'),
-      await database('auth.lock.sqlite'),
-      dir,
+    await t.execute(
+      'CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, target TEXT NOT NULL, source TEXT NOT NULL, stage TEXT NOT NULL, data TEXT NOT NULL, error TEXT, UNIQUE(target,source))',
     );
+    await t.execute(
+      'CREATE TABLE IF NOT EXISTS album (target TEXT NOT NULL, path TEXT NOT NULL, sha TEXT, data TEXT NOT NULL, PRIMARY KEY(target,path))',
+    );
+    await t.execute(
+      'CREATE TABLE IF NOT EXISTS removals (target TEXT NOT NULL, path TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(target,path))',
+    );
+    await t.execute(
+      'CREATE TABLE IF NOT EXISTS staged_cleanup (id TEXT PRIMARY KEY, name TEXT NOT NULL)',
+    );
+    // Later metadata edits must not automatically restore a user-deleted backup.
+    await t.execute(
+      'CREATE TABLE IF NOT EXISTS deleted_media (target TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(target,source))',
+    );
+    await t.insert('prefs', {
+      'key': 'device',
+      'value': jsonEncode(const Uuid().v4()),
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
   }
 
   Future<void> close() async {
