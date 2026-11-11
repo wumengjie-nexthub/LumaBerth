@@ -176,10 +176,24 @@ class Backup {
       return;
     }
     final next = plainMap(await media.invokeMethod('snapshot'));
-    final rows = await changes(cursor as Json, next);
+    final previous = cursor as Json;
+    final rebuilt = next.keys
+        .where(
+          (volume) =>
+              previous.containsKey(volume) &&
+              previous[volume]['version'] != next[volume]['version'],
+        )
+        .toList();
+    for (final volume in rebuilt) {
+      next.remove(volume);
+    }
+    final rows = await changes(previous, next);
     await store.enqueue(target, rows, automatic: true);
-    await store.set('auto:$target', advanceMediaCursor(cursor, next));
-    await store.set('scanInfo:$target', null);
+    await store.set('auto:$target', advanceMediaCursor(previous, next));
+    await store.set(
+      'scanInfo:$target',
+      rebuilt.isEmpty ? null : '存储卷 ${rebuilt.join('、')} 的媒体库已重建，请重新选择自动备份起点',
+    );
   }
 
   Future<void> _prepare(Json job) async {

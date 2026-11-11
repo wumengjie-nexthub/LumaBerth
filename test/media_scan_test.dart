@@ -122,8 +122,17 @@ void main() {
     final current = await store.pref('auto:$target');
     mounted = {
       'card': {'version': 'rebuilt', 'generation': 1},
+      'phone': volume(8),
     };
-    await expectLater(backup.discover(), throwsA(isA<PlatformException>()));
-    expect(await store.pref('auto:$target'), current);
+    await add('phone-new', 'phone', 8);
+    await backup.discover();
+    final saved = await store.pref('auto:$target');
+    expect(saved['card'], current['card']);
+    expect(saved['phone']['generation'], 8);
+    expect(await store.pref('scanInfo:$target'), contains('card'));
+    expect(await sources(), [
+      'content://media/offline',
+      'content://media/phone-new',
+    ]);
   });
 }
