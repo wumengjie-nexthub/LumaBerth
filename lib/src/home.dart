@@ -196,8 +196,11 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
       context,
       MaterialPageRoute(builder: (_) => ConnectPage(store)),
     );
-    if (ok == true) {
-      selection.clear();
+    if (ok == true && mounted) {
+      setState(() {
+        tab = 0;
+        selection.clear();
+      });
       await initialize();
     }
   }
@@ -242,6 +245,72 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
     unawaited(runQueue());
   }
 
+  Future<void> startAlbumBackup({
+    required bool existing,
+    required bool enableAuto,
+  }) async {
+    final b = backup!;
+    await dialogs.invokeMethod('permission');
+    if (await media.invokeMethod('permission') != 'full') {
+      throw StateError('备份整个相册需要完整照片权限。你也可以用「选择照片」备份部分照片。');
+    }
+    final end = plainMap(await media.invokeMethod('snapshot'));
+    final start = initialMediaCursor(end, includeExisting: existing);
+    if (existing) {
+      final rows = await b.changes(start, end);
+      final bytes = rows.fold<int>(0, (n, v) => n + (v['size'] as int? ?? 0));
+      if (!mounted) return;
+      var futurePhotos = enableAuto || automatic;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (c) => StatefulBuilder(
+          builder: (c, update) => AlertDialog(
+            title: const Text('备份手机已有照片？'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    "可读取 ${rows.length} 张，原图共 ${sizeLabel(bytes)}。\n备份到 ${b.binding['name']}。\n\n$oneWay",
+                  ),
+                  if (!enableAuto && !automatic)
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('以后也自动备份新照片'),
+                      value: futurePhotos,
+                      onChanged: (v) => update(() => futurePhotos = v == true),
+                    ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(c),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(c, true),
+                child: const Text('开始备份'),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (confirmed != true) return;
+      await store.enqueue(b.target, rows);
+      enableAuto = futurePhotos;
+    }
+    if (enableAuto && !automatic) {
+      await store.set('auto:${b.target}', advanceMediaCursor(start, end));
+      await store.set('scanInfo:${b.target}', null);
+    }
+    await store.set('consent:${b.target}', true);
+    await schedule(store);
+    await reload();
+    if (mounted && existing) setState(() => tab = 1);
+    unawaited(runQueue());
+  }
+
   Future<void> auto(bool enable) async {
     final b = backup!;
     if (enable) {
@@ -265,33 +334,12 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
         ),
       );
       if (choice == null) return;
-      await dialogs.invokeMethod('permission');
-      if (await media.invokeMethod('permission') != 'full') {
-        throw StateError('自动备份需要完整照片权限。你仍可用系统选择器手动导入。');
-      }
-      final end = plainMap(await media.invokeMethod('snapshot'));
-      final start = initialMediaCursor(end, includeExisting: choice);
-      if (choice) {
-        final rows = await b.changes(start, end);
-        final bytes = rows.fold<int>(0, (n, v) => n + (v['size'] as int? ?? 0));
-        if (!mounted ||
-            !await confirm(
-              '备份已有照片？',
-              '当前可读取 ${rows.length} 张，预计上传原图 ${sizeLabel(bytes)}。',
-              '加入队列',
-            )) {
-          return;
-        }
-        await store.enqueue(b.target, rows);
-      }
-      await store.set('auto:${b.target}', advanceMediaCursor(start, end));
-      await store.set('consent:${b.target}', true);
-      await schedule(store);
-    } else {
-      await store.workLock.transaction(
-        (_) => store.set('auto:${b.target}', null),
-      );
+      await startAlbumBackup(existing: choice, enableAuto: true);
+      return;
     }
+    await store.workLock.transaction(
+      (_) => store.set('auto:${b.target}', null),
+    );
     await store.set('scanInfo:${b.target}', null);
     await reload();
     unawaited(runQueue());
@@ -546,6 +594,16 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
               icon: const Icon(Icons.add_photo_alternate_outlined),
               label: const Text('选择照片'),
             ),
+            if (Platform.isAndroid)
+              OutlinedButton(
+                onPressed: busy
+                    ? null
+                    : () => guard(
+                        () =>
+                            startAlbumBackup(existing: true, enableAuto: false),
+                      ),
+                child: const Text('备份手机已有照片'),
+              ),
             if (selection.isNotEmpty)
               OutlinedButton(
                 onPressed: busy

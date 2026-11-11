@@ -11,31 +11,52 @@ import 'catalog.dart';
 import 'github.dart';
 import 'store.dart';
 
+enum _RepositoryStep { choose, create, install }
+
 class ConnectPage extends StatefulWidget {
-  const ConnectPage(this.store, {super.key});
+  const ConnectPage(
+    this.store, {
+    super.key,
+    this.clientId = const String.fromEnvironment('GITHUB_CLIENT_ID'),
+    this.appSlug = const String.fromEnvironment('GITHUB_APP_SLUG'),
+  });
   final Store store;
+  final String clientId, appSlug;
   @override
   State<ConnectPage> createState() => _ConnectState();
 }
 
-class _ConnectState extends State<ConnectPage> {
+class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
   final client = http.Client();
-  final id = TextEditingController(
-    text: const String.fromEnvironment('GITHUB_CLIENT_ID'),
-  );
-  final slug = TextEditingController(
-    text: const String.fromEnvironment('GITHUB_APP_SLUG'),
-  );
+  bool get configured =>
+      widget.clientId.isNotEmpty && widget.appSlug.isNotEmpty;
+  _RepositoryStep step = _RepositoryStep.choose;
+  int? selectedId;
+  bool refreshOnReturn = false;
   String? code, error;
   bool busy = false;
   Json? tokens, user;
   List<Json>? repos;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    if (configured) unawaited(guard(authorize));
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && refreshOnReturn && !busy) {
+      refreshOnReturn = false;
+      unawaited(guard(list));
+    }
+  }
+
+  @override
   void dispose() {
     client.close();
-    id.dispose();
-    slug.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -59,8 +80,7 @@ class _ConnectState extends State<ConnectPage> {
   }
 
   Future<void> authorize() async {
-    final clientId = id.text.trim();
-    if (clientId.isEmpty) throw StateError('请输入 GitHub App 的公开 Client ID');
+    final clientId = widget.clientId;
     final challenge = await Github.oauth(client, '/login/device/code', {
       'client_id': clientId,
     });
@@ -73,10 +93,6 @@ class _ConnectState extends State<ConnectPage> {
       Duration(seconds: challenge['expires_in']),
     );
     var interval = challenge['interval'] as int? ?? 5;
-    await launchUrl(
-      Uri.https('github.com', '/login/device'),
-      mode: LaunchMode.externalApplication,
-    );
     var failures = 0;
     while (mounted) {
       final remaining = deadline.difference(DateTime.now());
@@ -131,13 +147,21 @@ class _ConnectState extends State<ConnectPage> {
     try {
       user = await api.json('GET', '/user') as Json;
       final rows = await api.repositories();
-      if (mounted) setState(() => repos = rows);
+      if (!mounted) return;
+      setState(() {
+        repos = rows;
+        selectedId = rows.length == 1 ? rows.single['id'] as int : null;
+        if (rows.isNotEmpty) step = _RepositoryStep.choose;
+      });
     } on ApiError catch (e) {
       if (e.status == 401 && mounted) {
         setState(() {
           tokens = null;
           user = null;
           repos = null;
+          selectedId = null;
+          step = _RepositoryStep.choose;
+          refreshOnReturn = false;
         });
       }
       rethrow;
@@ -147,140 +171,198 @@ class _ConnectState extends State<ConnectPage> {
   Future<void> bind(Json row) async {
     final repo = await github.verify(row);
     if (!mounted) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (c) => AlertDialog(
-        title: const Text('绑定这个私有仓库？'),
-        content: Text("${user!['login']}  /  ${repo['full_name']}\n\n$oneWay"),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(c),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(c, true),
-            child: const Text('确认绑定'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    await widget.store.connect(repo, user!, tokens!, id.text.trim());
+    if (repo['full_name'] != row['full_name']) {
+      await list();
+      throw StateError('仓库名称已更新，请重新确认相册。');
+    }
+    await widget.store.connect(repo, user!, tokens!, widget.clientId);
     if (mounted) Navigator.pop(context, true);
   }
 
+  Future<void> openGitHub(String path, {bool copyCode = false}) async {
+    try {
+      if (copyCode) await Clipboard.setData(ClipboardData(text: code!));
+      if (!mounted) return;
+      if (!await launchUrl(
+        Uri.https('github.com', path),
+        mode: LaunchMode.externalApplication,
+      )) {
+        throw StateError('无法打开 GitHub，请检查默认浏览器后重试。');
+      }
+    } catch (e) {
+      if (mounted) setState(() => error = readable(e));
+    }
+  }
+
+  void showStep(_RepositoryStep next) => setState(() {
+    step = next;
+    error = null;
+  });
+
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('连接 GitHub')),
-    body: Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 540),
-        child: ListView(
-          padding: const EdgeInsets.all(24),
-          children: [
-            Text(
-              tokens == null ? '连接你的私有相册' : '选择照片专用仓库',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: 14),
-            if (tokens == null) ...[
-              const Text('先将 GitHub App 安装到照片专用私有仓库，再到 GitHub 输入设备码。'),
-              const SizedBox(height: 20),
-              TextField(
-                controller: id,
-                enabled: !busy,
-                decoration: const InputDecoration(
-                  labelText: 'GitHub App Client ID',
+  Widget build(BuildContext context) {
+    final rows = repos ?? const <Json>[];
+    final selected = rows.where((r) => r['id'] == selectedId).firstOrNull;
+    return Scaffold(
+      appBar: AppBar(title: const Text('连接 GitHub')),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 540),
+          child: ListView(
+            padding: const EdgeInsets.all(24),
+            children: [
+              if (!configured) ...[
+                const Text('此安装包尚未配置 GitHub 登录。请向提供安装包的人获取已配置的版本。'),
+              ] else if (tokens == null) ...[
+                Text(
+                  '在 GitHub 确认登录',
+                  style: Theme.of(context).textTheme.headlineMedium,
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: slug,
-                enabled: !busy,
-                decoration: const InputDecoration(
-                  labelText: 'GitHub App 安装名（slug）',
-                ),
-              ),
-            ],
-            Wrap(
-              spacing: 6,
-              children: [
-                TextButton(
-                  onPressed: () => guardLink(),
-                  child: const Text('安装到指定仓库'),
-                ),
-                TextButton(
-                  onPressed: () => launchUrl(
-                    Uri.https('github.com', '/new'),
-                    mode: LaunchMode.externalApplication,
-                  ),
-                  child: const Text('创建私有仓库'),
-                ),
-              ],
-            ),
-            if (tokens == null)
-              FilledButton.icon(
-                onPressed: busy ? null : () => guard(authorize),
-                icon: const Icon(Icons.key),
-                label: const Text('获取设备码'),
-              ),
-            if (code != null)
-              Card(
-                child: ListTile(
-                  title: SelectableText(
+                const SizedBox(height: 12),
+                if (code != null) ...[
+                  const Text('复制下方设备码，在 GitHub 粘贴并授权，然后返回泊光相册。'),
+                  const SizedBox(height: 16),
+                  SelectableText(
                     code!,
-                    style: Theme.of(context).textTheme.headlineSmall,
+                    style: Theme.of(context).textTheme.headlineMedium,
                   ),
-                  subtitle: const Text('在 github.com/login/device 输入此码'),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.copy),
-                    tooltip: '复制设备码',
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
                     onPressed: () =>
-                        Clipboard.setData(ClipboardData(text: code!)),
+                        openGitHub('/login/device', copyCode: true),
+                    icon: const Icon(Icons.copy),
+                    label: const Text('复制并前往 GitHub'),
                   ),
-                ),
-              ),
-            if (tokens != null) ...[
-              if (user != null) Text('已授权账号  ${user!['login']}'),
-              if (repos?.isEmpty == true)
+                  const Text('也可以手动打开 github.com/login/device 输入设备码。'),
+                ] else if (!busy)
+                  FilledButton(
+                    onPressed: () => guard(authorize),
+                    child: const Text('重新获取设备码'),
+                  )
+                else
+                  const Text('正在获取设备码…'),
+              ] else ...[
+                if (user != null) Text("已登录 GitHub · ${user!['login']}"),
+                const SizedBox(height: 12),
+                if (step == _RepositoryStep.create) ...[
+                  Text(
+                    '创建私有相册',
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                  const Text(
+                    '在 GitHub 给仓库取个名字，选择 Private（私有），并开启 Add a README。建好后返回这里。',
+                  ),
+                  FilledButton(
+                    onPressed: () => openGitHub('/new'),
+                    child: const Text('前往 GitHub 创建私库'),
+                  ),
+                  OutlinedButton(
+                    onPressed: () => showStep(_RepositoryStep.install),
+                    child: const Text('已创建，继续授权'),
+                  ),
+                ] else if (step == _RepositoryStep.install) ...[
+                  Text(
+                    '允许泊光访问相册',
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                  const Text(
+                    '在 GitHub 选择 Only select repositories，只勾选照片私库，然后确认安装。',
+                  ),
+                  FilledButton(
+                    onPressed: busy
+                        ? null
+                        : () {
+                            refreshOnReturn = true;
+                            openGitHub(
+                              '/apps/${widget.appSlug}/installations/new',
+                            );
+                          },
+                    child: const Text('前往 GitHub 选择私库'),
+                  ),
+                ] else if (selected != null) ...[
+                  Text(
+                    '使用这个私有相册？',
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.lock_outline),
+                    title: Text(selected['full_name']),
+                  ),
+                  const Text('之后备份的照片会保存到这里。'),
+                  FilledButton(
+                    onPressed: busy ? null : () => guard(() => bind(selected)),
+                    child: const Text('确认使用'),
+                  ),
+                  TextButton(
+                    onPressed: busy
+                        ? null
+                        : () => setState(() {
+                            selectedId = null;
+                            error = null;
+                          }),
+                    child: const Text('选择其他相册'),
+                  ),
+                ] else if (repos != null) ...[
+                  Text(
+                    '照片存在哪里？',
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                  for (final row in rows)
+                    ListTile(
+                      leading: const Icon(Icons.lock_outline),
+                      title: Text(row['full_name']),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: busy
+                          ? null
+                          : () => setState(() {
+                              selectedId = row['id'] as int;
+                              error = null;
+                            }),
+                    ),
+                  FilledButton(
+                    onPressed: busy
+                        ? null
+                        : () => showStep(_RepositoryStep.create),
+                    child: const Text('创建私有相册'),
+                  ),
+                  OutlinedButton(
+                    onPressed: busy
+                        ? null
+                        : () => showStep(_RepositoryStep.install),
+                    child: const Text('授权已有私库'),
+                  ),
+                ],
+                if (step != _RepositoryStep.choose)
+                  TextButton(
+                    onPressed: busy
+                        ? null
+                        : () {
+                            refreshOnReturn = false;
+                            showStep(_RepositoryStep.choose);
+                          },
+                    child: const Text('返回选择相册'),
+                  ),
+                if (step != _RepositoryStep.create &&
+                    (selected == null || step == _RepositoryStep.install))
+                  OutlinedButton(
+                    onPressed: busy ? null : () => guard(list),
+                    child: const Text('刷新可用仓库'),
+                  ),
+              ],
+              if (busy)
                 const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 18),
-                  child: Text(
-                    '尚无可选仓库。请创建 Private 仓库并初始化 README，在 GitHub App 安装范围内勾选它，授予 Contents 读写权限。',
-                  ),
+                  padding: EdgeInsets.only(top: 18),
+                  child: LinearProgressIndicator(),
                 ),
-              for (final r in repos ?? <Json>[])
-                ListTile(
-                  leading: const Icon(Icons.lock_outline),
-                  title: Text(r['full_name']),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: busy ? null : () => guard(() => bind(r)),
+              if (error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: SelectableText(error!),
                 ),
-              OutlinedButton(
-                onPressed: busy ? null : () => guard(list),
-                child: const Text('刷新可用仓库'),
-              ),
             ],
-            if (busy)
-              const Padding(
-                padding: EdgeInsets.only(top: 18),
-                child: LinearProgressIndicator(),
-              ),
-            if (error != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: SelectableText(error!),
-              ),
-          ],
+          ),
         ),
       ),
-    ),
-  );
-  Future<void> guardLink() async {
-    final name = slug.text.trim();
-    final uri = name.isEmpty
-        ? Uri.https('github.com', '/settings/installations')
-        : Uri.https('github.com', '/apps/$name/installations/new');
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+    );
   }
 }
