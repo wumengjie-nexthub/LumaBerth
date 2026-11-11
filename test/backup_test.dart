@@ -54,8 +54,9 @@ class Remote {
         'default_branch': defaultBranch,
       });
     }
-    if (path.endsWith('/branches/$defaultBranch'))
-      return response({'name': 'main'});
+    if (path.endsWith('/branches/$defaultBranch')) {
+      return response({'name': defaultBranch});
+    }
     if (path.endsWith('/commits/main')) {
       return response({
         'commit': {

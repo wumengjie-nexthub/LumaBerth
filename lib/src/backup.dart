@@ -621,8 +621,9 @@ class Backup {
     if (thumbnail &&
         !refreshThumbnail &&
         await file.exists() &&
-        await file.length() > 0)
+        await file.length() > 0) {
       return file;
+    }
     final temp = File(p.join(cache.path, '${const Uuid().v4()}.part'));
     try {
       final stream = await github.assetStream(root, id);
