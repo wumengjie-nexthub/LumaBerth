@@ -628,6 +628,33 @@ void main() {
     expect((await store.photos('1-2')).single['size'], 3);
   });
 
+  test('缩略图缓存为空或解码失败后，可以重新下载替换', () async {
+    await engine.backupOne(job);
+    final photo = (await store.photos('1-2')).single;
+    final cache = await engine.download(photo, thumbnail: true);
+    await cache.writeAsBytes([]);
+    expect(
+      await (await engine.download(photo, thumbnail: true)).readAsBytes(),
+      [4, 5],
+    );
+    await cache.writeAsBytes([0]);
+    expect(
+      await (await engine.download(
+        photo,
+        thumbnail: true,
+        refreshThumbnail: true,
+      )).readAsBytes(),
+      [4, 5],
+    );
+    expect(remote.downloads, [102, 102, 102]);
+    remote.bytes[102] = [];
+    await expectLater(
+      engine.download(photo, thumbnail: true, refreshThumbnail: true),
+      throwsFormatException,
+    );
+    expect(await cache.readAsBytes(), [4, 5]);
+  });
+
   test('普通照片按两个附件分组，空仓库 1200 张', () {
     final groups = <int>[0];
     for (var i = 0; i < 1200; i++) {

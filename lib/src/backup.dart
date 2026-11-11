@@ -609,12 +609,20 @@ class Backup {
     });
   });
 
-  Future<File> download(Json photo, {required bool thumbnail}) async {
+  Future<File> download(
+    Json photo, {
+    required bool thumbnail,
+    bool refreshThumbnail = false,
+  }) async {
     final id = photo[thumbnail ? 'thumbnail' : 'original'] as int;
     final cache = Directory(p.join(store.dir.path, 'thumbs', target));
     await cache.create(recursive: true);
     final file = File(p.join(cache.path, '$id.jpg'));
-    if (thumbnail && await file.exists()) return file;
+    if (thumbnail &&
+        !refreshThumbnail &&
+        await file.exists() &&
+        await file.length() > 0)
+      return file;
     final temp = File(p.join(cache.path, '${const Uuid().v4()}.part'));
     try {
       final stream = await github.assetStream(root, id);
@@ -624,7 +632,10 @@ class Backup {
       } finally {
         await sink.close();
       }
-      if (thumbnail) return await temp.rename(file.path);
+      if (thumbnail) {
+        if (await temp.length() == 0) throw const FormatException('缩略图为空，请重试');
+        return await temp.rename(file.path);
+      }
       if (await temp.length() != photo['size'] ||
           await fileHash(temp) != photo['sha256']) {
         throw StateError('原图大小或 SHA-256 不一致，未导出');
