@@ -118,13 +118,17 @@ class Store {
       DateTime.now().millisecondsSinceEpoch +
       (tokens['expires_in'] as int? ?? 28800) * 1000;
   Future<void> disconnect() async {
+    final target = await tokenLock.transaction((_) async {
+      final binding = await pref('binding');
+      await set('binding', null);
+      await vault.delete(key: 'github-session');
+      return binding?['target'] as String?;
+    });
+    // Active uploads observe the cleared binding while we wait for the worker to exit.
     await workLock.transaction((_) async {
-      await tokenLock.transaction((_) async {
-        final binding = await pref('binding');
-        if (binding != null) await set('auto:${binding['target']}', null);
-        await set('binding', null);
-        await vault.delete(key: 'github-session');
-      });
+      if (target != null && (await pref('binding'))?['target'] != target) {
+        await set('auto:$target', null);
+      }
     });
   }
 

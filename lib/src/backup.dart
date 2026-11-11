@@ -71,6 +71,9 @@ class Backup {
     if (current['id'] != binding['repo'] || current['private'] != true) {
       throw StateError('仓库身份或可见性已改变，已停止写入');
     }
+    if ((await store.pref('binding'))?['target'] != target) {
+      throw StateError('已断开 GitHub');
+    }
     await store.set('writeAt', DateTime.now().millisecondsSinceEpoch);
   }
 
