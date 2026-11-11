@@ -46,3 +46,10 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Local signing credentials
+*.jks
+*.keystore
+*.p12
+*.pfx
+key.properties
