@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -48,7 +49,12 @@ class _ConnectState extends State<ConnectPage> {
     } catch (e) {
       if (mounted) setState(() => error = readable(e));
     } finally {
-      if (mounted) setState(() => busy = false);
+      if (mounted) {
+        setState(() {
+          busy = false;
+          code = null;
+        });
+      }
     }
   }
 
@@ -71,14 +77,35 @@ class _ConnectState extends State<ConnectPage> {
       Uri.https('github.com', '/login/device'),
       mode: LaunchMode.externalApplication,
     );
-    while (DateTime.now().isBefore(deadline)) {
-      await Future<void>.delayed(Duration(seconds: interval));
+    var failures = 0;
+    while (mounted) {
+      final remaining = deadline.difference(DateTime.now());
+      if (remaining <= Duration.zero) break;
+      final delay = Duration(seconds: interval) * (1 << failures);
+      await Future<void>.delayed(delay < remaining ? delay : remaining);
       if (!mounted) return;
-      final response = await Github.oauth(client, '/login/oauth/access_token', {
-        'client_id': clientId,
-        'device_code': challenge['device_code'],
-        'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
-      });
+      if (delay >= remaining || !DateTime.now().isBefore(deadline)) break;
+      final Json response;
+      try {
+        response = await Github.oauth(client, '/login/oauth/access_token', {
+          'client_id': clientId,
+          'device_code': challenge['device_code'],
+          'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
+        });
+      } catch (e) {
+        if (e is! http.ClientException &&
+            e is! SocketException &&
+            e is! TimeoutException) {
+          rethrow;
+        }
+        if (!mounted) return;
+        if (failures < 3) failures++;
+        setState(() => error = '网络连接中断，将自动使用当前设备码重试。');
+        continue;
+      }
+      if (!mounted) return;
+      failures = 0;
+      if (error != null) setState(() => error = null);
       if (response['error'] == 'authorization_pending') continue;
       if (response['error'] == 'slow_down') {
         interval += 5;
@@ -87,7 +114,10 @@ class _ConnectState extends State<ConnectPage> {
       if (response['access_token'] == null) {
         throw StateError('设备授权未完成：${response['error'] ?? '请重试'}');
       }
-      tokens = response;
+      setState(() {
+        tokens = response;
+        code = null;
+      });
       await list();
       return;
     }
@@ -98,13 +128,19 @@ class _ConnectState extends State<ConnectPage> {
       Github(client, () async => tokens!['access_token'] as String);
   Future<void> list() async {
     final api = github;
-    user = await api.json('GET', '/user') as Json;
-    final rows = await api.repositories();
-    if (mounted) {
-      setState(() {
-        repos = rows;
-        code = null;
-      });
+    try {
+      user = await api.json('GET', '/user') as Json;
+      final rows = await api.repositories();
+      if (mounted) setState(() => repos = rows);
+    } on ApiError catch (e) {
+      if (e.status == 401 && mounted) {
+        setState(() {
+          tokens = null;
+          user = null;
+          repos = null;
+        });
+      }
+      rethrow;
     }
   }
 
@@ -143,11 +179,11 @@ class _ConnectState extends State<ConnectPage> {
           padding: const EdgeInsets.all(24),
           children: [
             Text(
-              repos == null ? '连接你的私有相册' : '选择照片专用仓库',
+              tokens == null ? '连接你的私有相册' : '选择照片专用仓库',
               style: Theme.of(context).textTheme.headlineMedium,
             ),
             const SizedBox(height: 14),
-            if (repos == null) ...[
+            if (tokens == null) ...[
               const Text('先将 GitHub App 安装到照片专用私有仓库，再到 GitHub 输入设备码。'),
               const SizedBox(height: 20),
               TextField(
@@ -182,7 +218,7 @@ class _ConnectState extends State<ConnectPage> {
                 ),
               ],
             ),
-            if (repos == null)
+            if (tokens == null)
               FilledButton.icon(
                 onPressed: busy ? null : () => guard(authorize),
                 icon: const Icon(Icons.key),
@@ -204,16 +240,16 @@ class _ConnectState extends State<ConnectPage> {
                   ),
                 ),
               ),
-            if (repos != null) ...[
-              Text('已授权账号  ${user!['login']}'),
-              if (repos!.isEmpty)
+            if (tokens != null) ...[
+              if (user != null) Text('已授权账号  ${user!['login']}'),
+              if (repos?.isEmpty == true)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 18),
                   child: Text(
                     '尚无可选仓库。请创建 Private 仓库并初始化 README，在 GitHub App 安装范围内勾选它，授予 Contents 读写权限。',
                   ),
                 ),
-              for (final r in repos!)
+              for (final r in repos ?? <Json>[])
                 ListTile(
                   leading: const Icon(Icons.lock_outline),
                   title: Text(r['full_name']),
