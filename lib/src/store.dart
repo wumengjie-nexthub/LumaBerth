@@ -46,6 +46,9 @@ class Store {
       await t.execute(
         'CREATE TABLE IF NOT EXISTS removals (target TEXT NOT NULL, path TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(target,path))',
       );
+      await t.execute(
+        'CREATE TABLE IF NOT EXISTS staged_cleanup (id TEXT PRIMARY KEY, name TEXT NOT NULL)',
+      );
       // Later metadata edits must not automatically restore a user-deleted backup.
       await t.execute(
         'CREATE TABLE IF NOT EXISTS deleted_media (target TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(target,source))',

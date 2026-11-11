@@ -398,6 +398,10 @@ class Backup {
           : null,
     );
     await store.db.transaction((t) async {
+      await t.insert('staged_cleanup', {
+        'id': id,
+        'name': job['name'],
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
       if (!published) {
         await t.delete(
           'album',
@@ -421,13 +425,25 @@ class Backup {
         whereArgs: [id],
       );
     });
-    for (final file in {
-      originalFile.path,
+    await _cleanStaged(job);
+  }
+
+  Future<void> _cleanStaged(Json job) async {
+    final id = job['id'] as String;
+    for (final path in {
+      store.stagedOriginal(job).path,
       store.staged(id, 'original').path,
       store.staged(id, 'jpg').path,
-    }.map(File.new)) {
-      if (await file.exists()) await file.delete();
+    }) {
+      try {
+        await File(path).delete();
+      } on PathNotFoundException {
+        continue;
+      } on FileSystemException {
+        return; // A later queue pass retries cleanup after the file is released.
+      }
     }
+    await store.db.delete('staged_cleanup', where: 'id=?', whereArgs: [id]);
   }
 
   Future<bool> run() async {
@@ -436,6 +452,9 @@ class Backup {
     await store.set('status:$target', blocked);
     if (blocked != null) return false;
     await store.workLock.transaction((_) async {
+      for (final job in await store.db.query('staged_cleanup')) {
+        await _cleanStaged(job);
+      }
       if ((await store.pref('binding'))?['target'] != target) return;
       try {
         await discover();

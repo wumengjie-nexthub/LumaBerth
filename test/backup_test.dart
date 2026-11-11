@@ -258,6 +258,25 @@ void main() {
     );
   });
 
+  test('本地清理失败仍完成备份，下轮只重试清理', () async {
+    remote.failCommit = true;
+    await expectLater(engine.backupOne(job), throwsA(isA<ApiError>()));
+    remote.failCommit = false;
+    final original = store.stagedOriginal(job);
+    await original.delete();
+    // A directory occupying the file path makes file deletion fail on both platforms.
+    final occupied = await Directory(original.path).create();
+    expect(await engine.run(), true);
+    expect((await store.jobs('1-2')).single['stage'], '已备份');
+    expect(await store.db.query('staged_cleanup'), hasLength(1));
+    final puts = remote.puts;
+    await occupied.delete();
+    expect(await engine.run(), true);
+    expect(await store.db.query('staged_cleanup'), isEmpty);
+    expect(remote.puts, puts);
+    expect(remote.uploads, 2);
+  });
+
   test('Windows 覆盖原路径后从所选快照读取拍摄时间', () async {
     final file = File('${dir.path}/camera.jpg');
     await file.writeAsBytes([1]);
