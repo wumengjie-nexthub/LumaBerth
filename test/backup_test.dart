@@ -245,9 +245,8 @@ void main() {
     final saved = (await store.jobs('1-2')).single;
     expect(saved['stage'], '待写入目录');
     expect(remote.assets.length, 2);
-    for (final role in ['original', 'jpg']) {
-      await store.staged(job['id'], role).delete();
-    }
+    await store.stagedOriginal(job).delete();
+    await store.staged(job['id'], 'jpg').delete();
     remote.failCommit = false;
     await engine.backupOne(saved);
     expect(remote.uploads, 2);
@@ -257,6 +256,32 @@ void main() {
       engine.download(photo, thumbnail: false),
       throwsStateError,
     );
+  });
+
+  test('Windows 覆盖原路径后从所选快照读取拍摄时间', () async {
+    final file = File('${dir.path}/camera.jpg');
+    await file.writeAsBytes([1]);
+    await store.enqueue('1-2', [
+      {'source': file.path, 'name': 'camera.jpg', 'size': 1},
+    ]);
+    await file.writeAsBytes([2]);
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(media, (call) async {
+      final metadata = File(call.arguments['metadata']);
+      expect(metadata.path, endsWith('.jpg'));
+      await File(call.arguments['thumb']).writeAsBytes([3]);
+      return DateTime.utc(
+        (await metadata.readAsBytes()).single == 1 ? 2001 : 2025,
+      ).millisecondsSinceEpoch;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(media, null));
+    await engine.backupOne((await store.jobs('1-2')).last);
+    expect(
+      (await store.photos('1-2')).single['takenAt'],
+      DateTime.utc(2001).toIso8601String(),
+    );
+    expect(remote.bytes[101], [1]);
   });
 
   test('Windows 同名同大小文件覆盖后再选，两份内容各入队一次', () async {

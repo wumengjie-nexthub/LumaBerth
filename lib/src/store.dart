@@ -328,5 +328,15 @@ class Store {
     return result;
   }
 
+  File stagedOriginal(Json job) {
+    final extension = p.windows.extension(job['name'] as String);
+    final role =
+        Platform.isWindows &&
+            RegExp(r'^\.[a-zA-Z0-9]{1,10}$').hasMatch(extension)
+        ? 'original$extension'
+        : 'original';
+    return staged(job['id'], role);
+  }
+
   File staged(String id, String role) => File(p.join(dir.path, '$id.$role'));
 }

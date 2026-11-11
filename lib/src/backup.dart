@@ -196,8 +196,7 @@ class Backup {
     );
   }
 
-  Future<void> _prepare(Json job) async {
-    final original = store.staged(job['id'], 'original');
+  Future<void> _prepare(Json job, File original) async {
     final thumb = store.staged(job['id'], 'jpg');
     if (job['sha256'] != null &&
         (job['original'] != null || await original.exists()) &&
@@ -220,7 +219,7 @@ class Backup {
       taken = await media.invokeMethod<int>('thumbnail', {
         'source': original.path,
         'thumb': thumb.path,
-        'metadata': source,
+        'metadata': original.path,
       });
     }
     final size = await original.length();
@@ -248,8 +247,14 @@ class Backup {
   Future<void> backupOne(Json job) async {
     final id = job['id'] as String;
     final resumeIndex = job['original'] != null && job['thumbnail'] != null;
+    final originalFile = store.stagedOriginal(job);
     if (!resumeIndex) {
-      if (job['sha256'] == null) await _prepare(job);
+      // Older and newly selected snapshots initially use the extensionless staging name.
+      final legacy = store.staged(id, 'original');
+      if (legacy.path != originalFile.path && await legacy.exists()) {
+        await legacy.rename(originalFile.path);
+      }
+      if (job['sha256'] == null) await _prepare(job, originalFile);
       var group =
           job['group'] as int? ??
           await store.pref('group:$target') as int? ??
@@ -284,7 +289,7 @@ class Backup {
             (a) => a['name'] == '$id.original' || a['name'] == '$id.thumb.jpg',
           )) {
             final original = a['name'] == '$id.original';
-            final file = store.staged(id, original ? 'original' : 'jpg');
+            final file = original ? originalFile : store.staged(id, 'jpg');
             if (!await file.exists()) {
               final sink = file.openWrite();
               try {
@@ -309,11 +314,10 @@ class Backup {
           await store.checkpoint(job, '正在重新分组');
           continue;
         }
-        if ((!names.contains('$id.original') &&
-                !await store.staged(id, 'original').exists()) ||
+        if ((!names.contains('$id.original') && !await originalFile.exists()) ||
             (!names.contains('$id.thumb.jpg') &&
                 !await store.staged(id, 'jpg').exists())) {
-          await _prepare(job);
+          await _prepare(job, originalFile);
         }
         job['group'] = group;
         await store.set('group:$target', group);
@@ -327,7 +331,7 @@ class Backup {
             rel['id'],
             assets,
             '$id.original',
-            store.staged(id, 'original'),
+            originalFile,
             job['size'],
             job['sha256'],
           );
@@ -417,8 +421,11 @@ class Backup {
         whereArgs: [id],
       );
     });
-    for (final role in ['original', 'jpg']) {
-      final file = store.staged(id, role);
+    for (final file in {
+      originalFile.path,
+      store.staged(id, 'original').path,
+      store.staged(id, 'jpg').path,
+    }.map(File.new)) {
       if (await file.exists()) await file.delete();
     }
   }
