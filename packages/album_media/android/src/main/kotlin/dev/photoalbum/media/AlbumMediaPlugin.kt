@@ -48,16 +48,13 @@ class AlbumMediaPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     }
     private fun scan(call: MethodCall): List<Map<String, Any?>> {
         check(permission() == "full") { "自动备份需要完整照片权限，仍可手动选择照片" }
-        val previous = call.argument<Map<String, Map<String, Any?>>>("from").orEmpty()
-        val end = call.argument<Map<String, Map<String, Any?>>>("to").orEmpty()
+        val windows = requireNotNull(call.argument<Map<String, List<String>>>("windows"))
+        val selection = requireNotNull(call.argument<String>("selection"))
         val result = mutableListOf<Map<String, Any?>>()
-        for ((volume, limit) in end) {
-            val start = previous[volume]
-            check(start == null || start["version"] == limit["version"]) { "系统媒体库已重建，请重新选择自动备份起点" }
+        for ((volume, bounds) in windows) {
             val uri = MediaStore.Images.Media.getContentUri(volume)
             val columns = arrayOf("_id", "_display_name", "_size", "datetaken", "date_added")
-            val args = arrayOf((start?.get("generation") ?: 0).toString(), limit["generation"].toString())
-            context.contentResolver.query(uri, columns, "generation_added > ? AND generation_added <= ? AND is_pending=0 AND is_trashed=0", args, "_id")?.use {
+            context.contentResolver.query(uri, columns, selection, bounds.toTypedArray(), "_id")?.use {
                 while (it.moveToNext()) {
                     val taken = if (it.getLong(3) > 0) it.getLong(3) else it.getLong(4) * 1000
                     result.add(mapOf("source" to ContentUris.withAppendedId(uri, it.getLong(0)).toString(),

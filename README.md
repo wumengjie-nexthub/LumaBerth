@@ -51,7 +51,7 @@ flutter run -d <Android设备ID>
 ## 定向验证
 
 ```powershell
-flutter test test/backup_test.dart test/connection_view_test.dart
+flutter test test/backup_test.dart test/media_scan_test.dart test/connection_view_test.dart
 ```
 
 备份测试使用临时 SQLite 数据库和模拟 GitHub 接口，覆盖中断、摘要不符、换组、目录恢复、限流、下载及删除。界面测试覆盖 360 与 1280 像素宽度的首次连接流程。

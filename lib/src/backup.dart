@@ -21,6 +21,26 @@ String readable(Object e) => e is PlatformException
     ? (e.message ?? e.code)
     : e.toString().replaceFirst('Bad state: ', '');
 
+// Only mounted volumes advance. The floor is the user's original opt-in boundary.
+Json advanceMediaCursor(Json previous, Json mounted) => {
+  for (final v in mounted.entries)
+    v.key: {
+      ...v.value as Json,
+      'floor':
+          previous[v.key]?['floor'] ??
+          previous[v.key]?['generation'] ??
+          v.value['generation'],
+    },
+};
+
+Json initialMediaCursor(Json mounted, {required bool includeExisting}) => {
+  for (final v in mounted.entries)
+    v.key: {
+      'version': v.value['version'],
+      'generation': includeExisting ? -1 : v.value['generation'],
+    },
+};
+
 class Backup {
   Backup(this.store, this.binding, this.client);
   final Store store;
@@ -121,18 +141,35 @@ class Backup {
   }
 
   Future<List<Json>> changes(Json from, Json to) async {
-    final rows =
-        await media.invokeListMethod<dynamic>('scan', {
-          'from': from,
-          'to': to,
-        }) ??
-        [];
+    final windows = <String, dynamic>{};
+    for (final v in to.entries) {
+      final last = from[v.key];
+      // A newly mounted volume starts at this snapshot.
+      if (last == null) continue;
+      if (last['version'] != v.value['version']) {
+        throw PlatformException(code: 'media', message: '系统媒体库已重建，请重新选择自动备份起点');
+      }
+      if (last['generation'] == v.value['generation']) continue;
+      windows[v.key] = [
+        last['floor'] ?? last['generation'],
+        last['generation'],
+        v.value['generation'],
+      ].map((n) => n.toString()).toList();
+    }
+    if (windows.isEmpty) return [];
+    final rows = (await media.invokeListMethod<dynamic>('scan', {
+      'windows': windows,
+      // Publication changes generation_modified; editing a pre-opt-in item must not import it.
+      'selection':
+          'generation_added > ? AND generation_modified > ? '
+          'AND generation_modified <= ? AND is_pending=0 AND is_trashed=0',
+    }))!;
     return rows.map(plainMap).toList();
   }
 
   Future<void> discover() async {
     final cursor = await store.pref('auto:$target');
-    if (!Platform.isAndroid || cursor == null) return;
+    if (cursor == null) return;
     if (await media.invokeMethod('permission') != 'full') {
       await store.set('scanInfo:$target', '相册权限已改变，请重新授权以继续自动发现');
       return;
@@ -140,7 +177,7 @@ class Backup {
     final next = plainMap(await media.invokeMethod('snapshot'));
     final rows = await changes(cursor as Json, next);
     await store.enqueue(target, rows, automatic: true);
-    await store.set('auto:$target', next);
+    await store.set('auto:$target', advanceMediaCursor(cursor, next));
     await store.set('scanInfo:$target', null);
   }
 

@@ -270,8 +270,9 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
         throw StateError('自动备份需要完整照片权限。你仍可用系统选择器手动导入。');
       }
       final end = plainMap(await media.invokeMethod('snapshot'));
+      final start = initialMediaCursor(end, includeExisting: choice);
       if (choice) {
-        final rows = await b.changes({}, end);
+        final rows = await b.changes(start, end);
         final bytes = rows.fold<int>(0, (n, v) => n + (v['size'] as int? ?? 0));
         if (!mounted ||
             !await confirm(
@@ -283,7 +284,7 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
         }
         await store.enqueue(b.target, rows);
       }
-      await store.set('auto:${b.target}', end);
+      await store.set('auto:${b.target}', advanceMediaCursor(start, end));
       await store.set('consent:${b.target}', true);
       await schedule(store);
     } else {
