@@ -439,6 +439,82 @@ void main() {
     expect(remote.deletedAssets, [703, 701]);
     expect((await store.photos('1-2')).map((p) => p['id']), [job['id']]);
   });
+  for (final physical in [false, true]) {
+    test('另一设备删除后，刷新允许同一原片重新备份（旧端物理删除：$physical）', () async {
+      final file = File('${dir.path}/original.jpg');
+      await file.writeAsBytes([1, 2, 3]);
+      final input = {'source': file.path, 'name': 'original.jpg', 'size': 3};
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(media, (call) async {
+        await File(call.arguments['thumb']).writeAsBytes([4, 5]);
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(media, null));
+      await store.enqueue('1-2', [input]);
+      Future<List<Json>> versions() async =>
+          (await store.jobs('1-2'))
+              .where((j) => j['source'] == file.path)
+              .toList();
+      final first = (await versions()).single;
+      await engine.backupOne(first);
+      final otherStore = await Store.open(
+        directory: Directory('${dir.path}/other'),
+      );
+      try {
+        final other = TestBackup(otherStore, remote.transport);
+        await other.refresh();
+        await other.requestRemoval((await otherStore.photos('1-2')).single);
+        await other.run();
+      } finally {
+        await otherStore.close();
+      }
+      if (physical) {
+        remote.indexes.clear();
+      } else {
+        // Older versions could cache the tombstone without retiring the completed job.
+        final raw = base64Decode(remote.indexes.values.single);
+        await store.db.update(
+          'album',
+          {'sha': checksum(raw), 'data': utf8.decode(raw)},
+          where: 'target=? AND path=?',
+          whereArgs: ['1-2', indexPath(first['id'])],
+        );
+      }
+      await engine.refresh();
+      expect(await versions(), isEmpty);
+      expect(
+        (await store.jobs('1-2')).single['id'],
+        job['id'],
+      ); // still pending
+      await store.enqueue('1-2', [input]);
+      final fresh = (await versions()).single;
+      expect(fresh['id'], isNot(first['id']));
+      await engine.backupOne(fresh);
+      final photo = (await store.photos('1-2')).single;
+      expect(photo['id'], fresh['id']);
+      expect(remote.bytes[photo['original']], [1, 2, 3]);
+    });
+  }
+
+  test('远端删除后自动扫描不能恢复旧 MediaStore 来源，手动重选仍然有效', () async {
+    final input = {
+      'source': 'content://media/external/images/media/12',
+      'name': 'a.jpg',
+    };
+    await store.enqueue('1-2', [input], automatic: true);
+    final row = (await store.jobs('1-2')).last;
+    await store.checkpoint(row, '已备份');
+    await engine.refresh(); // the confirmed directory contains no such photo
+    await store.enqueue('1-2', [input], automatic: true);
+    expect(
+      (await store.jobs('1-2')).where((j) => j['source'] == input['source']),
+      isEmpty,
+    );
+    await store.enqueue('1-2', [input]);
+    expect((await store.jobs('1-2')).last['source'], input['source']);
+  });
+
   test('刷新遇到坏目录时完整保留旧相册和去重记录，成功后同时切换', () async {
     await engine.backupOne(job);
     await engine.refresh();
@@ -460,6 +536,7 @@ void main() {
       (await store.photos('1-2')).map((p) => p['id']),
       unorderedEquals([b, c]),
     );
+    expect(await store.jobs('1-2'), isEmpty);
   });
 
   test('普通照片按两个附件分组，空仓库 1200 张', () {

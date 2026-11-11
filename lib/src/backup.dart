@@ -139,7 +139,7 @@ class Backup {
     }
     final next = plainMap(await media.invokeMethod('snapshot'));
     final rows = await changes(cursor as Json, next);
-    await store.enqueue(target, rows);
+    await store.enqueue(target, rows, automatic: true);
     await store.set('auto:$target', next);
     await store.set('scanInfo:$target', null);
   }
@@ -348,7 +348,9 @@ class Backup {
           where: 'target=? AND path=?',
           whereArgs: [target, path],
         );
-        await t.delete('jobs', where: 'target=? AND id=?', whereArgs: [target, id]);
+        final batch = t.batch();
+        store.forgetJob(batch, target, id);
+        await batch.commit(noResult: true);
         return;
       }
       await t.insert('album', {
@@ -506,6 +508,22 @@ class Backup {
           whereArgs: [target, path],
         );
       }
+      // Reconcile even if an earlier app version already cached the deletion marker.
+      final completed = await t.query(
+        'jobs',
+        columns: ['id'],
+        where: 'target=? AND stage=?',
+        whereArgs: [target, '已备份'],
+      );
+      for (final row in completed) {
+        final id = row['id'] as String;
+        final path = indexPath(id);
+        final cached = changed[path] ?? previous[path];
+        if (!remote.containsKey(path) ||
+            deletedPhoto(cached!['data'] as String)?['id'] == id) {
+          store.forgetJob(batch, target, id);
+        }
+      }
       await batch.commit(noResult: true);
     });
   });
@@ -611,11 +629,9 @@ class Backup {
           whereArgs: [target, photo['path']],
         );
       }
-      await t.delete(
-        'jobs',
-        where: 'id=? AND target=?',
-        whereArgs: [photo['id'], target],
-      );
+      final batch = t.batch();
+      store.forgetJob(batch, target, photo['id']);
+      await batch.commit(noResult: true);
     });
   }
 }

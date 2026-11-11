@@ -46,6 +46,10 @@ class Store {
       await t.execute(
         'CREATE TABLE IF NOT EXISTS removals (target TEXT NOT NULL, path TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(target,path))',
       );
+      // Later metadata edits must not automatically restore a user-deleted backup.
+      await t.execute(
+        'CREATE TABLE IF NOT EXISTS deleted_media (target TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(target,source))',
+      );
       await t.insert('prefs', {
         'key': 'device',
         'value': jsonEncode(const Uuid().v4()),
@@ -166,7 +170,11 @@ class Store {
             },
           )
           .toList();
-  Future<void> enqueue(String target, List<Json> inputs) async {
+  Future<void> enqueue(
+    String target,
+    List<Json> inputs, {
+    bool automatic = false,
+  }) async {
     final unversioned = <Json>[];
     for (final input in inputs) {
       if (Platform.isWindows &&
@@ -182,6 +190,23 @@ class Store {
       final batch = t.batch();
       for (final input in unversioned) {
         final id = const Uuid().v4();
+        if (automatic) {
+          batch.rawInsert(
+            'INSERT OR IGNORE INTO jobs (id,target,source,stage,data) '
+            'SELECT ?,?,?,?,? WHERE NOT EXISTS '
+            '(SELECT 1 FROM deleted_media WHERE target=? AND source=?)',
+            [
+              id,
+              target,
+              input['source'],
+              '等待备份',
+              jsonEncode({...input, 'id': id}),
+              target,
+              input['source'],
+            ],
+          );
+          continue;
+        }
         batch.insert('jobs', {
           'id': id,
           'target': target,
@@ -262,6 +287,16 @@ class Store {
     } finally {
       if (!retained && await snapshot.exists()) await snapshot.delete();
     }
+  }
+
+  // Keep the Android MediaStore URI suppressed for automatic scans only.
+  void forgetJob(Batch batch, String target, String id) {
+    batch.rawInsert(
+      'INSERT OR IGNORE INTO deleted_media(target,source) '
+      "SELECT target,source FROM jobs WHERE target=? AND id=? AND source LIKE 'content://media/%'",
+      [target, id],
+    );
+    batch.delete('jobs', where: 'target=? AND id=?', whereArgs: [target, id]);
   }
 
   Future<void> checkpoint(Json job, String stage, [String? error]) async {
