@@ -136,6 +136,7 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
     if (slug.contains(RegExp(r'[/\\?#\s]'))) {
       throw StateError('请填写完整的 GitHub App 页面链接，或链接末尾的名称。');
     }
+    await checkApp(slug);
     if (!mounted) return;
     setState(() {
       clientId = id;
@@ -143,6 +144,21 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
       configuring = false;
     });
     await authorize(persist: true);
+  }
+
+  Future<void> checkApp(String slug) async {
+    final response = await client
+        .get(
+          Uri.https('api.github.com', '/apps/${Uri.encodeComponent(slug)}'),
+          headers: {'Accept': 'application/vnd.github+json'},
+        )
+        .timeout(const Duration(seconds: 20));
+    if (response.statusCode == 404) {
+      throw StateError(
+        'GitHub 上没有找到这个 App。请检查链接末尾的名称，'
+        '例如 https://github.com/settings/apps/你的App名称。',
+      );
+    }
   }
 
   Future<void> authorize({bool persist = false}) async {
