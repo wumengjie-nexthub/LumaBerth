@@ -4,7 +4,7 @@ Android、Windows 与 macOS 的 Flutter 客户端原型。三端直接连接用�
 
 ## 启动
 
-本轮采用 Flutter 3.47.9、Dart 3.13。Android 最低为 Android 11（API 30），开发环境使用 JDK 17 或更高版本、Android SDK 36 和 Flutter 对应的 NDK。Windows 需要 Flutter 支持的 Visual Studio C++ 桌面开发工作负载、Windows SDK，以及插件目录的符号链接支持。macOS 最低 macOS 12，需要 Xcode 与 CocoaPods；SQLite 直接使用系统自带库，无需额外下载。
+本轮采用 Flutter 3.47.9、Dart 3.13。Android 最低为 Android 11（API 30），开发环境使用 JDK 17 或更高版本、Android SDK 36 和 Flutter 对应的 NDK。Windows 需要 Flutter 支持的 Visual Studio C++ 桌面开发工作负载、Windows SDK，以及插件目录的符号链接支持。macOS 最低 macOS 12，需要 Xcode（Flutter 的 macOS 插件集成走 Swift Package Manager，无需 CocoaPods）。
 
 ```powershell
 flutter pub get
