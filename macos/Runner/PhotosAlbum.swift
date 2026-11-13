@@ -106,10 +106,76 @@ func albumScan(windows: [String: [String]]) throws -> [[String: Any?]] {
   return rows
 }
 
+/// Appends an album diagnostic line to a file inside the app container, where
+/// it can be read without attaching a debugger.
+func albumDiagnostic(_ text: String) {
+  guard
+    let dir = try? FileManager.default.url(
+      for: .applicationSupportDirectory, in: .userDomainMask,
+      appropriateFor: nil, create: true)
+  else { return }
+  let url = dir.appendingPathComponent("album-diagnostics.log")
+  // Keep the file small; it only exists to explain a failed backup.
+  if let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int,
+    size > 64 * 1024 {
+    try? FileManager.default.removeItem(at: url)
+  }
+  let line = Data((text + "\n").utf8)
+  if let handle = try? FileHandle(forWritingTo: url) {
+    handle.seekToEndOfFile()
+    handle.write(line)
+    try? handle.close()
+  } else {
+    try? line.write(to: url)
+  }
+}
+
+/// Resolves an asset by identifier.
+///
+/// `PHAsset.fetchAssets(withLocalIdentifiers:)` misses some sources that the
+/// global fetch returns (shared albums and synced items on macOS), so fall back
+/// to an enumeration and match the identifier ourselves.
+func findAsset(_ identifier: String) -> PHAsset? {
+  let direct = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
+  if let asset = direct.firstObject { return asset }
+  let options = PHFetchOptions()
+  options.includeHiddenAssets = true
+  options.includeAllBurstAssets = true
+  var match: PHAsset?
+  PHAsset.fetchAssets(with: options).enumerateObjects { asset, _, stop in
+    if asset.localIdentifier == identifier {
+      match = asset
+      stop.pointee = true
+    }
+  }
+  let status = PHPhotoLibrary.authorizationStatus(for: .readWrite).rawValue
+  if let match {
+    albumDiagnostic("SCAN \(identifier) sourceType=\(match.sourceType.rawValue) auth=\(status)")
+  } else {
+    let imageOptions = PHFetchOptions()
+    imageOptions.predicate = NSPredicate(
+      format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+    albumDiagnostic(
+      "MISS \(identifier) auth=\(status) direct=\(direct.count) "
+        + "all=\(PHAsset.fetchAssets(with: nil).count) "
+        + "images=\(PHAsset.fetchAssets(with: imageOptions).count)")
+  }
+  return match
+}
+
+/// The message a user can act on when an asset cannot be resolved. Losing the
+/// Photos grant is by far the most common cause, and "原片已移除" would send the
+/// user looking for a photo that is still there.
+func unresolvableAssetError() -> AlbumError {
+  if PHPhotoLibrary.authorizationStatus(for: .readWrite) != .authorized {
+    return AlbumError.missing("需要「照片」权限才能继续备份，请在系统设置中允许映格访问照片")
+  }
+  return AlbumError.missing("这张照片已不在系统相册中")
+}
+
 func albumMetadata(identifier: String) throws -> [String: Any?] {
-  let found = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
-  guard let asset = found.firstObject else {
-    throw AlbumError.missing("原片已移除，请重新选择")
+  guard let asset = findAsset(identifier) else {
+    throw unresolvableAssetError()
   }
   return albumRow(for: asset)
 }
@@ -117,9 +183,8 @@ func albumMetadata(identifier: String) throws -> [String: Any?] {
 /// Exports the original through PhotoKit and renders the 480px thumbnail with
 /// ImageIO, returning the EXIF capture time in milliseconds.
 func albumPrepare(identifier: String, original: String, thumb: String) throws -> NSNumber? {
-  let found = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
-  guard let asset = found.firstObject else {
-    throw AlbumError.missing("原片已移除，请重新选择")
+  guard let asset = findAsset(identifier) else {
+    throw unresolvableAssetError()
   }
   guard let resource = originalResource(of: asset) else {
     throw AlbumError.missing("无法读取这张照片的原件")

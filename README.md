@@ -6,6 +6,8 @@ Android、Windows 与 macOS 的 Flutter 客户端原型。三端直接连接用�
 
 本轮采用 Flutter 3.47.9、Dart 3.13。Android 最低为 Android 11（API 30），开发环境使用 JDK 17 或更高版本、Android SDK 36 和 Flutter 对应的 NDK。Windows 需要 Flutter 支持的 Visual Studio C++ 桌面开发工作负载、Windows SDK，以及插件目录的符号链接支持。macOS 最低 macOS 12，需要 Xcode（Flutter 的 macOS 插件集成走 Swift Package Manager，无需 CocoaPods）。
 
+macOS 本地开发请用 `macos/dev-run.sh` 代替 `flutter run -d macos`。Flutter 模板默认用 ad-hoc 签名，每次重新构建都会产生新的代码签名，系统因此把它当成另一个应用：之前授予的「照片」权限和钥匙串条目都会失效，于是每次启动都会重新索要密码和权限。该脚本在构建后用本机已有的开发者身份重新签名，签名保持稳定，授权即可延续。正式分发的 DMG 使用 Developer ID 签名，同样稳定，不受此影响。
+
 ```powershell
 flutter pub get
 flutter devices
