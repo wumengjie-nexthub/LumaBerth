@@ -17,7 +17,13 @@ class Store {
   Store(this.db, this.workLock, this.tokenLock, this.dir);
   final Database db, workLock, tokenLock;
   final Directory dir;
-  static const vault = FlutterSecureStorage();
+  /// macOS keeps the legacy keychain: the data protection keychain needs the
+  /// `keychain-access-groups` entitlement, which in turn needs a provisioning
+  /// profile and would stop the distributed DMG from launching on other Macs.
+  /// Nothing here shares keychain items between apps, so opting out is safe.
+  static const vault = FlutterSecureStorage(
+    mOptions: MacOsOptions(usesDataProtectionKeychain: false),
+  );
   static Future<Store> open({Directory? directory}) async {
     if (Platform.isWindows || Platform.isMacOS) sqfliteFfiInit();
     // WorkManager engines must not block the foreground engine's SQLite worker.
