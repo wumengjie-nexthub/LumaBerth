@@ -1,15 +1,16 @@
 # 映格（LumaBerth）
 
-Android 与 Windows 的 Flutter 客户端原型。两端直接连接用户自己的 GitHub 私有仓库，共用 Dart 备份队列、远端目录和恢复逻辑。
+Android、Windows 与 macOS 的 Flutter 客户端原型。三端直接连接用户自己的 GitHub 私有仓库，共用 Dart 备份队列、远端目录和恢复逻辑。
 
 ## 启动
 
-本轮采用 Flutter 3.47.9、Dart 3.13。Android 最低为 Android 11（API 30），开发环境使用 JDK 17 或更高版本、Android SDK 36 和 Flutter 对应的 NDK。Windows 需要 Flutter 支持的 Visual Studio C++ 桌面开发工作负载、Windows SDK，以及插件目录的符号链接支持。
+本轮采用 Flutter 3.47.9、Dart 3.13。Android 最低为 Android 11（API 30），开发环境使用 JDK 17 或更高版本、Android SDK 36 和 Flutter 对应的 NDK。Windows 需要 Flutter 支持的 Visual Studio C++ 桌面开发工作负载、Windows SDK，以及插件目录的符号链接支持。macOS 最低 macOS 12，需要 Xcode 与 CocoaPods；SQLite 直接使用系统自带库，无需额外下载。
 
 ```powershell
 flutter pub get
 flutter devices
 flutter run -d windows
+flutter run -d macos
 flutter run -d <Android设备ID>
 ```
 
@@ -54,7 +55,8 @@ Windows 在 `flutter build windows --release` 后，用 Inno Setup 7 编译 `win
 
 - **Android**　手动导入使用系统照片选择器，也提供系统文件选择器读取原件。系统照片选择器可能按用户授权隐去位置元数据。自动发现使用 MediaStore，需要完整照片权限。每个存储卷独立保存备份起点和扫描进度。相机稍后写完的新照片会在后续扫描入队；拔卡保留进度，首次遇到的新卷从当时开始扫描。开启时可选「从现在开始」，或先查看已有照片的数量和大小再加入队列。WorkManager 在网络和电量条件满足时执行。
 - **Windows**　选择本机文件导入，点击缩略图查看详情或下载原图。勾选多张照片后可批量导出到一个目录，同名文件自动编号。Windows Imaging Component 从原文件生成缩略图，HEIC 等格式需要系统安装对应解码器。退出程序保留队列，下次打开继续。
-- **两端**　相册按时间浏览并按需加载缩略图。备份保留静态文件，原图大小和 SHA-256 校验成功、缩略图上传成功、目录写入成功后才显示「已备份」。来源删除和断开账号均保留远端备份。云端删除在照片详情中单独确认，未完成的删除保存在本机待继续。
+- **macOS**　与 Windows 相同：选择本机文件导入，点击缩略图查看详情或下载原图，勾选多张批量导出。缩略图由系统 ImageIO 生成并应用 EXIF 方向，HEIC 原生支持。令牌存于系统钥匙串，退出程序保留队列。
+- **三端**　相册按时间浏览并按需加载缩略图。备份保留静态文件，原图大小和 SHA-256 校验成功、缩略图上传成功、目录写入成功后才显示「已备份」。来源删除和断开账号均保留远端备份。云端删除在照片详情中单独确认，未完成的删除保存在本机待继续。
 
 ## 跨端目录 v1
 

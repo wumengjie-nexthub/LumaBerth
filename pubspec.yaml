@@ -21,6 +21,14 @@ dependencies:
   url_launcher: ^6.3.3
   uuid: ^4.6.0
   workmanager: ^0.10.10
+# macOS ships libsqlite3; use it instead of downloading a prebuilt binary.
+hooks:
+  user_defines:
+    sqlite3:
+      source:
+        macos: system
+        default: sqlite3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

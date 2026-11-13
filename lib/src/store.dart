@@ -19,9 +19,9 @@ class Store {
   final Directory dir;
   static const vault = FlutterSecureStorage();
   static Future<Store> open({Directory? directory}) async {
-    if (Platform.isWindows) sqfliteFfiInit();
+    if (Platform.isWindows || Platform.isMacOS) sqfliteFfiInit();
     // WorkManager engines must not block the foreground engine's SQLite worker.
-    final factory = Platform.isAndroid || Platform.isWindows
+    final factory = Platform.isAndroid || Platform.isWindows || Platform.isMacOS
         ? databaseFactoryFfi
         : databaseFactory;
     final dir = directory ?? await getApplicationSupportDirectory();
@@ -195,10 +195,11 @@ class Store {
   }) async {
     final unversioned = <Json>[];
     for (final input in inputs) {
-      if (Platform.isWindows &&
-          p.windows.isAbsolute(input['source']) &&
+      final desktop = Platform.isWindows || Platform.isMacOS;
+      if (desktop &&
+          (Platform.isWindows ? p.windows : p.context).isAbsolute(input['source']) &&
           (input['size'] ?? 0) < maxAssetBytes) {
-        await _enqueueWindowsFile(target, input);
+        await _enqueueDesktopFile(target, input);
       } else {
         unversioned.add(input);
       }
@@ -238,7 +239,7 @@ class Store {
   }
 
   // Keep the bytes chosen in the picker, even if a camera later reuses the filename.
-  Future<void> _enqueueWindowsFile(String target, Json input) async {
+  Future<void> _enqueueDesktopFile(String target, Json input) async {
     final path = input['source'] as String;
     final source = File(path);
     if (await source.length() >= maxAssetBytes) {
@@ -349,7 +350,7 @@ class Store {
   File stagedOriginal(Json job) {
     final extension = p.windows.extension(job['name'] as String);
     final role =
-        Platform.isWindows &&
+        (Platform.isWindows || Platform.isMacOS) &&
             RegExp(r'^\.[a-zA-Z0-9]{1,10}$').hasMatch(extension)
         ? 'original$extension'
         : 'original';
