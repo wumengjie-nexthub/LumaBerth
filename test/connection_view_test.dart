@@ -203,6 +203,7 @@ void main() {
         expect(find.textContaining(message), findsOneWidget);
         expect(find.textContaining('不是 App ID'), findsWidgets);
         expect(find.text('重新获取设备码'), findsNothing);
+        expect(store.values['githubApp'], isNull);
 
         await tester.enterText(find.byType(TextField).at(0), 'client-correct');
         await tester.pump();
@@ -212,6 +213,10 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 400));
         expect(find.text('TEST-1234'), findsOneWidget);
+        expect(store.values['githubApp'], {
+          'clientId': 'client-correct',
+          'appSlug': 'personal-app',
+        });
         await tester.pumpWidget(const SizedBox());
         await tester.pump(const Duration(seconds: 5));
       }, () => client);
