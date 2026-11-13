@@ -13,15 +13,38 @@ flutter run -d windows
 flutter run -d <Android设备ID>
 ```
 
-首次使用：点「连接我的 GitHub」，在应用中复制设备码并前往 GitHub 确认登录。已有授权的私库可以直接选择；新用户可创建照片专用私库（选择 Private 并开启 Add a README），再在 GitHub 选择 Only select repositories，仅授权该私库。回到应用确认账号和库名，点「确认使用」即进入相册首页。安卓用户可在首页选择照片或备份手机已有照片，确认数量和大小后才加入队列；自动备份新照片可以单独开启。
+首次使用：每位使用者先创建自己的 GitHub App，在映格中填写其 Client ID 和 App 设置页链接，然后复制设备码并前往 GitHub 确认登录。已有授权的私库可以直接选择；新用户可创建照片专用私库（选择 Private 并开启 Add a README），再在 GitHub 选择 Only select repositories，仅授权该私库。回到应用确认账号和库名，点「确认使用」即进入相册首页。
 
-发行版默认使用 [LumaBerth GitHub App](https://github.com/apps/lumaberth)（所有者 `suikiiovo`）。从此版本源码运行 `flutter build apk --release` 或 `flutter build windows --release` 即会带上正式 App 的公开标识。使用者登录自己的 GitHub 并选择授权的私库即可。
+映格默认不内置项目维护者的 GitHub App。自行创建 App 的步骤见下文；公开标识保存在本机，登录令牌另存于设备安全存储中。已有版本绑定的仓库和令牌不会因更新自动删除；需要重新授权时，请填写你自己的 GitHub App。
 
-需要使用自己的 GitHub App 时，注册并开启 Device Flow 和过期用户令牌，授予 Contents 读写权限，然后同时传入 `--dart-define=GITHUB_CLIENT_ID=你的公开ClientID` 与 `--dart-define=GITHUB_APP_SLUG=你的安装名`。GitHub Actions 也支持同名仓库变量，两项都留空时使用正式 App。
+旧版用户如果想改用自己的 App，可在「设置」中选择「断开 GitHub」，再用自己的 App 连接原来的私库。断开不会删除仓库中的照片，但会关闭自动备份；重新连接后请按需重新开启。
+
+## 隐私与授权
+
+映格使用登录用户的 GitHub 授权，将原图、缩略图和目录直接写入所选仓库；当前客户端不通过项目维护者的服务器中转照片。登录令牌保存在使用者设备的安全存储中。
+
+- 应用请求的 `Contents: Read and write` 是整个获授权仓库的内容读写权限，并非只限相册目录。安装时请选择 `Only select repositories`，并仅授权照片专用私库。
+- 原图没有经过端到端加密。GitHub、获授权的仓库访问者，以及能够使用 GitHub App 私钥获取安装令牌的 App 管理者，都可能访问授权范围内的内容。
+- 在应用中断开账号会清除本机登录信息，不会删除远端照片，也不会自动卸载 GitHub 上的 App。如需撤销访问，请在 GitHub 的已安装 App 和已授权 App 设置中分别检查并撤销。
+- 源码仓库可以公开，照片仓库应保持独立且私有。将照片仓库改为公开会暴露其中的目录和 Release 附件。公开源码前也应检查提交历史和 Actions 日志中的照片、令牌及密钥。
+
+## 创建自己的 GitHub App
+
+每位使用者自行注册并管理 GitHub App，不需要运行自己的服务器：
+
+1. 打开映格，点「连接我的 GitHub」→「开始设置」→「打开 GitHub 创建页面」。页面会预填 App 名称、主页、私有可见范围、关闭 Webhook 和仓库 `Contents: Read and write` 权限；如名称被占用，可以换一个。GitHub 仍允许用户修改这些设置。
+2. 在 GitHub 的 `Identifying and authorizing users` 区域勾选 `Enable Device Flow`，保留用户授权令牌过期设置，滑到页面底部点 `Create GitHub App`。GitHub 文档没有列出设备授权的预填参数，因此这一步仍需手动操作。
+3. 创建后回到映格，点「我已创建，继续」。从 GitHub 的 App 设置页复制 **Client ID** 和浏览器地址栏中的设置页链接 `https://github.com/settings/apps/<slug>`，分别填入映格。也可填写 `https://github.com/apps/<slug>` 或链接末尾的名称。
+4. Client ID 不是 App ID；这些是公开标识，不要向映格输入 Client secret、App 私钥或访问令牌。点「保存并继续」，然后按提示完成设备码登录。
+5. 在 GitHub 安装自己的 App 时，仅选择照片专用私库；回到映格确认仓库。已创建过 App 的用户也可以在引导首页直接选择「我已经创建过 GitHub App」。
+
+注册界面的字段说明可参考 [GitHub 官方文档](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app)。
+
+开发者也可在自行构建时同时传入 `--dart-define=GITHUB_CLIENT_ID=你的ClientID` 和 `--dart-define=GITHUB_APP_SLUG=你的slug`。普通安装包不需要这些参数，由使用者在应用中填写即可。
 
 ## 安装与打包
 
-从 [GitHub Releases](https://github.com/wumengjie-nexthub/LumaBerth/releases/latest) 下载对应系统的安装包。Android 11 及以上使用通用 APK，64 位 Windows 使用 Setup.exe。发布页提供两个文件的 SHA-256。
+Android 11 及以上使用通用 APK，64 位 Windows 使用 Setup.exe。历史 [GitHub Releases](https://github.com/wumengjie-nexthub/LumaBerth/releases/latest) 可能仍使用旧的共享 App；支持应用内自行配置的版本以新安装包为准。
 
 Android 正式包在运行 `flutter build apk --release` 前需要设置 `LUMABERTH_KEYSTORE`（PKCS12 密钥库的绝对路径）和 `LUMABERTH_SIGNING_PASSWORD`（密钥库和别名 `lumaberth` 的密码）。后续更新须复用同一签名密钥并递增 `pubspec.yaml` 中的构建号。官方签名证书 SHA-256 为 `6274ecef5d05b6b6b07fa28f16d74e30799f425d37fca3ab1851bbcd145d06e9`，可用 Android SDK 的 `apksigner verify --print-certs` 核对。自行构建可使用自己的签名。
 
