@@ -6,6 +6,7 @@ import 'package:workmanager/workmanager.dart';
 import 'src/home.dart';
 import 'src/scheduler.dart';
 import 'src/store.dart';
+import 'src/theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,16 +22,9 @@ class AlbumApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: '泊光相册',
+    title: '映格',
     debugShowCheckedModeBanner: false,
-    theme: ThemeData(
-      useMaterial3: true,
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff28665b)),
-      scaffoldBackgroundColor: const Color(0xfff8faf7),
-      inputDecorationTheme: const InputDecorationTheme(
-        border: OutlineInputBorder(),
-      ),
-    ),
+    theme: albumTheme(),
     home: FutureBuilder<Store>(
       future: start(),
       builder: (context, snapshot) {

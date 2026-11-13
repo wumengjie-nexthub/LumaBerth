@@ -90,7 +90,7 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "dev.photoalbum" "\0"
-            VALUE "FileDescription", "LumaBerth" "\0"
+            VALUE "FileDescription", "映格" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "LumaBerth" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 dev.photoalbum. All rights reserved." "\0"
