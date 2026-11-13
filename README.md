@@ -34,7 +34,7 @@ flutter run -d <Android设备ID>
 
 1. 打开映格，点「连接我的 GitHub」→「开始设置」→「打开 GitHub 创建页面」。页面会预填 App 名称、主页、私有可见范围、关闭 Webhook 和仓库 `Contents: Read and write` 权限；如名称被占用，可以换一个。GitHub 仍允许用户修改这些设置。
 2. 在 GitHub 的 `Identifying and authorizing users` 区域勾选 `Enable Device Flow`，保留用户授权令牌过期设置，滑到页面底部点 `Create GitHub App`。GitHub 文档没有列出设备授权的预填参数，因此这一步仍需手动操作。
-3. 创建后回到映格，点「我已创建，继续」。从 GitHub 的 App 设置页复制 **Client ID** 和浏览器地址栏中的设置页链接 `https://github.com/settings/apps/<slug>`，分别填入映格。也可填写 `https://github.com/apps/<slug>` 或链接末尾的名称。
+3. 创建后回到映格，点「我已创建，继续」。从 GitHub 的 App 设置页复制 **Client ID** 和浏览器地址栏中的设置页链接 `https://github.com/settings/apps/<slug>`，分别填入映格。也可填写 `https://github.com/apps/<slug>` 或链接末尾的名称。映格会先确认这个名称对应一个真实存在的 App，再发起设备授权。
 4. Client ID 不是 App ID；这些是公开标识，不要向映格输入 Client secret、App 私钥或访问令牌。点「保存并继续」，然后按提示完成设备码登录。
 5. 在 GitHub 安装自己的 App 时，仅选择照片专用私库；回到映格确认仓库。已创建过 App 的用户也可以在引导首页直接选择「我已经创建过 GitHub App」。
 
@@ -84,9 +84,9 @@ Windows 在 `flutter build windows --release` 后，用 Inno Setup 7 编译 `win
 ## 定向验证
 
 ```powershell
-flutter test test/backup_test.dart test/media_scan_test.dart test/connection_view_test.dart
+flutter test test/backup_test.dart test/media_scan_test.dart test/connection_view_test.dart test/album_view_test.dart
 ```
 
-备份测试使用临时 SQLite 数据库和模拟 GitHub 接口，覆盖中断、摘要不符、换组、目录恢复、限流、下载及删除。界面测试覆盖 360 与 1280 像素宽度的首次连接流程。
+备份测试使用临时 SQLite 数据库和模拟 GitHub 接口，覆盖中断、摘要不符、换组、目录恢复、限流、下载及删除。界面测试覆盖 360 与 1280 像素宽度的首次连接流程（含自填 App、App 名称校验与错误提示），以及 320 与 1280 像素宽度的相册网格、照片详情与备份队列。
 
 真实 GitHub App 授权、Android 相册授权与锁屏调度、HEIC 原件元数据，以及 Android ↔ Windows 的双向恢复仍需实机验收。可用一张测试照片做双向恢复，分别比对源文件和另一端导出文件的大小与 SHA-256。
