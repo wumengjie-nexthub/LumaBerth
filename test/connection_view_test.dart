@@ -50,6 +50,10 @@ void main() {
       final store = EmptyStore();
       var challenges = 0;
       final client = MockClient((request) async {
+        if (request.method == 'GET' && request.url.host == 'api.github.com') {
+          expect(request.url.path, '/apps/personal-app');
+          return http.Response('{}', 200);
+        }
         challenges++;
         expect(request.url.toString(), 'https://github.com/login/device/code');
         expect(request.bodyFields['client_id'], 'client-test');
@@ -169,6 +173,10 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       final store = EmptyStore();
       final client = MockClient((request) async {
+        if (request.method == 'GET' && request.url.host == 'api.github.com') {
+          expect(request.url.path, '/apps/personal-app');
+          return http.Response('{}', 200);
+        }
         if (request.bodyFields['client_id'] == '123456') {
           return http.Response('', status);
         }
@@ -203,6 +211,7 @@ void main() {
         expect(find.textContaining(message), findsOneWidget);
         expect(find.textContaining('不是 App ID'), findsWidgets);
         expect(find.text('重新获取设备码'), findsNothing);
+        expect(store.values['githubApp'], isNull);
 
         await tester.enterText(find.byType(TextField).at(0), 'client-correct');
         await tester.pump();
@@ -212,9 +221,76 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 400));
         expect(find.text('TEST-1234'), findsOneWidget);
+        expect(store.values['githubApp'], {
+          'clientId': 'client-correct',
+          'appSlug': 'personal-app',
+        });
         await tester.pumpWidget(const SizedBox());
         await tester.pump(const Duration(seconds: 5));
       }, () => client);
     });
   }
+
+  testWidgets('填错 App 名称时提示修正，且不保存配置', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(360, 720);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = EmptyStore();
+    var challenges = 0;
+    final client = MockClient((request) async {
+      if (request.method == 'GET' && request.url.host == 'api.github.com') {
+        final slug = request.url.pathSegments.last;
+        return slug == 'personal-app'
+            ? http.Response('{}', 200)
+            : http.Response('{"message":"Not Found"}', 404);
+      }
+      challenges++;
+      expect(request.url.path, '/login/device/code');
+      return http.Response(
+        jsonEncode({
+          'device_code': 'device-test',
+          'user_code': 'TEST-1234',
+          'interval': 5,
+          'expires_in': 900,
+        }),
+        200,
+      );
+    });
+
+    await http.runWithClient(() async {
+      await tester.pumpWidget(MaterialApp(home: ConnectPage(store)));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('我已经创建过 GitHub App'));
+      await tester.tap(find.text('我已经创建过 GitHub App'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).at(0), 'client-test');
+      await tester.enterText(
+        find.byType(TextField).at(1),
+        'https://github.com/settings/apps/typo-app',
+      );
+      await tester.ensureVisible(find.text('保存并继续'));
+      await tester.tap(find.text('保存并继续'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('GitHub 上没有找到这个 App'), findsOneWidget);
+      expect(challenges, 0);
+      expect(store.values['githubApp'], isNull);
+
+      await tester.enterText(find.byType(TextField).at(1), 'personal-app');
+      await tester.pump();
+      expect(find.textContaining('GitHub 上没有找到这个 App'), findsNothing);
+      await tester.ensureVisible(find.text('保存并继续'));
+      await tester.tap(find.text('保存并继续'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('TEST-1234'), findsOneWidget);
+      expect(store.values['githubApp'], {
+        'clientId': 'client-test',
+        'appSlug': 'personal-app',
+      });
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 5));
+    }, () => client);
+  });
 }
