@@ -127,14 +127,16 @@ void main() {
     await engine.discover();
     expect((await store.jobs(target)).length, 1);
 
-    // 相册来源走 prepare（导出原件 + 生成缩略图），不走桌面文件缩略图。
-    await engine.backupOne(jobs.single);
-    expect(prepares, 1);
-    expect(thumbnails, 0);
+    // 导出与上传走 macOS 专属的相册来源分支；游标逻辑在各平台都验证。
+    if (Platform.isMacOS) {
+      await engine.backupOne(jobs.single);
+      expect(prepares, 1);
+      expect(thumbnails, 0);
 
-    final photos = await store.photos(target);
-    expect(photos.single['name'], 'IMG_0003.HEIC');
-    expect(photos.single['size'], 2048);
-    expect(photos.single['takenAt'], '2023-11-14T22:13:19.000Z');
+      final photos = await store.photos(target);
+      expect(photos.single['name'], 'IMG_0003.HEIC');
+      expect(photos.single['size'], 2048);
+      expect(photos.single['takenAt'], '2023-11-14T22:13:19.000Z');
+    }
   }, timeout: const Timeout(Duration(seconds: 90)));
 }
