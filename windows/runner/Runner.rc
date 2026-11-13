@@ -96,7 +96,7 @@ BEGIN
             VALUE "LegalCopyright", "Copyright (C) 2026 dev.photoalbum. All rights reserved." "\0"
             VALUE "OriginalFilename", "LumaBerth.exe" "\0"
             // path_provider uses ProductName to locate the existing local album.
-            VALUE "ProductName", "photo_album" "\0"
+            VALUE "ProductName", "映格" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

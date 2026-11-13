@@ -1,5 +1,5 @@
 name: lumaberth
-description: Android 与 Windows 上的 GitHub 私有仓库相册
+description: Android、Windows 与 macOS 上的 GitHub 私有仓库相册
 publish_to: none
 version: 0.2.0+6
 environment:
