@@ -14,6 +14,7 @@ import 'connect.dart';
 import 'github.dart';
 import 'scheduler.dart';
 import 'store.dart';
+import 'theme.dart';
 
 class AlbumHome extends StatefulWidget {
   const AlbumHome(this.store, {super.key});
@@ -28,6 +29,7 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
   Backup? backup;
   List<Json> photos = [], jobs = [];
   Set<String> selection = {};
+  Json? selected;
   int tab = 0;
   bool busy = false,
       running = false,
@@ -36,6 +38,7 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
       automatic = false,
       loaded = false;
   String? notice, status, scanInfo;
+  bool noticeError = false;
   List<Json> removals = [];
   Timer? timer;
   StreamSubscription<List<ConnectivityResult>>? connectivity;
@@ -78,15 +81,20 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  void message(String text) {
-    if (mounted) setState(() => notice = text);
+  void message(String text, {bool error = false}) {
+    if (mounted) {
+      setState(() {
+        notice = text;
+        noticeError = error;
+      });
+    }
   }
 
   Future<void> guardSilent(Future<void> Function() action) async {
     try {
       await action();
     } catch (e) {
-      message(readable(e));
+      message(readable(e), error: true);
     }
   }
 
@@ -99,7 +107,7 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
     try {
       await action();
     } catch (e) {
-      message(readable(e));
+      message(readable(e), error: true);
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -147,6 +155,10 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
       removals = pending;
       loaded = true;
       selection.retainAll(data.map((p) => p['id'] as String));
+      if (selected != null &&
+          !data.any((p) => p['id'] == selected!['id'])) {
+        selected = null;
+      }
     });
   }
 
@@ -172,7 +184,12 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
     }
   }
 
-  Future<bool> confirm(String title, String body, String action) async =>
+  Future<bool> confirm(
+    String title,
+    String body,
+    String action, {
+    bool danger = false,
+  }) async =>
       await showDialog<bool>(
         context: context,
         builder: (c) => AlertDialog(
@@ -185,6 +202,12 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(c, true),
+              style: danger
+                  ? FilledButton.styleFrom(
+                      backgroundColor: Theme.of(c).colorScheme.error,
+                      foregroundColor: Theme.of(c).colorScheme.onError,
+                    )
+                  : null,
               child: Text(action),
             ),
           ],
@@ -361,10 +384,11 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
 
   Future<void> export(List<Json> items) async {
     final b = backup!;
-    final folder = Platform.isWindows
+    final desktop = Platform.isWindows || Platform.isMacOS;
+    final folder = desktop
         ? await getDirectoryPath(confirmButtonText: '导出到这里')
         : null;
-    if (Platform.isWindows && folder == null) return;
+    if (desktop && folder == null) return;
     var count = 0;
     for (final photo in items) {
       try {
@@ -393,56 +417,24 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
   }
 
   Future<void> detail(Json photo) async {
+    if (MediaQuery.sizeOf(context).width >= 1000) {
+      setState(() => selected = photo);
+      return;
+    }
     final b = backup!;
     final action = await showDialog<String>(
       context: context,
       builder: (c) => AlertDialog(
-        title: Text(photo['name']),
+        title: Text(photo['name'], overflow: TextOverflow.ellipsis),
         content: SingleChildScrollView(
-          child: SizedBox(
-            width: 480,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  height: 260,
-                  width: double.infinity,
-                  clipBehavior: Clip.antiAlias,
-                  decoration: BoxDecoration(
-                    color: Theme.of(c).colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Thumb(b, photo, fit: BoxFit.contain),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  "${dateLabel(photo)}   ·   ${sizeLabel(photo['size'])}",
-                  style: Theme.of(c).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(c).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                ExpansionTile(
-                  tilePadding: EdgeInsets.zero,
-                  childrenPadding: const EdgeInsets.only(bottom: 8),
-                  title: const Text('文件校验信息'),
-                  children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: SelectableText(
-                        "SHA-256\n${photo['sha256']}",
-                        style: Theme.of(c).textTheme.bodySmall,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
+          child: SizedBox(width: 480, child: detailInfo(b, photo)),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(c, 'delete'),
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(c).colorScheme.error,
+            ),
             child: const Text('删除云端备份'),
           ),
           TextButton(
@@ -457,14 +449,23 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
       ),
     );
     if (!mounted) return;
+    await detailAction(photo, action);
+  }
+
+  Future<void> detailAction(Json photo, String? action) async {
+    final b = backup!;
     if (action == 'export') await export([photo]);
     if (action == 'delete' &&
         await confirm(
           '删除云端备份？',
           "${photo['name']}\n\n将从 ${b.binding['name']} 移除原图附件 #${photo['original']}、缩略图附件 #${photo['thumbnail']} 和该照片的目录记录。",
           '确认删除',
+          danger: true,
         )) {
       await b.requestRemoval(photo);
+      if (mounted && selected?['id'] == photo['id']) {
+        setState(() => selected = null);
+      }
       await reload();
       await schedule(store);
       await runQueue();
@@ -479,18 +480,19 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
       await Workmanager().cancelByUniqueName('photoalbum-periodic');
     }
     selection.clear();
+    selected = null;
     await initialize();
   }
 
   static const icons = [
     Icons.photo_library_outlined,
     Icons.cloud_upload_outlined,
-    Icons.tune_rounded,
+    Icons.settings_outlined,
   ];
   static const selectedIcons = [
     Icons.photo_library_rounded,
     Icons.cloud_upload_rounded,
-    Icons.tune_rounded,
+    Icons.settings_rounded,
   ];
   static const labels = ['照片', '备份', '设置'];
 
@@ -505,13 +507,17 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 76,
-                height: 76,
+                width: 88,
+                height: 88,
                 decoration: BoxDecoration(
                   color: theme.colorScheme.surfaceContainerLowest,
-                  borderRadius: BorderRadius.circular(24),
+                  shape: BoxShape.circle,
                 ),
-                child: Icon(icon, size: 36, color: theme.colorScheme.primary),
+                child: Icon(
+                  icon,
+                  size: 40,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
               const SizedBox(height: 24),
               Text(
@@ -538,7 +544,9 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final wide = MediaQuery.sizeOf(context).width >= 760;
+    final width = MediaQuery.sizeOf(context).width;
+    final wide = width >= 760;
+    final deskDetail = width >= 1000;
     final colors = Theme.of(context).colorScheme;
     final b = backup;
     final page = !loaded
@@ -555,7 +563,10 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
             ),
           )
         : switch (tab) {
-            0 => album(b),
+            0 => RefreshIndicator(
+              onRefresh: () => guard(refresh),
+              child: album(b),
+            ),
             1 => queue(),
             _ => settings(b),
           };
@@ -594,10 +605,22 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
                 if (busy) const LinearProgressIndicator(minHeight: 2),
                 if (notice != null)
                   Material(
-                    color: colors.secondaryContainer,
+                    color: noticeError
+                        ? colors.errorContainer
+                        : colors.secondaryContainer,
                     child: ListTile(
-                      leading: const Icon(Icons.info_outline_rounded),
-                      title: Text(notice!),
+                      leading: Icon(
+                        noticeError
+                            ? Icons.error_outline_rounded
+                            : Icons.info_outline_rounded,
+                        color: noticeError ? colors.onErrorContainer : null,
+                      ),
+                      title: Text(
+                        notice!,
+                        style: noticeError
+                            ? TextStyle(color: colors.onErrorContainer)
+                            : null,
+                      ),
                       trailing: IconButton(
                         onPressed: () => setState(() => notice = null),
                         icon: const Icon(Icons.close),
@@ -609,6 +632,8 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
               ],
             ),
           ),
+          if (deskDetail && b != null && selected != null)
+            detailPanel(b, selected!),
         ],
       ),
       bottomNavigationBar: !wide && b != null
@@ -628,6 +653,140 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
     );
   }
 
+  Widget detailInfo(Backup b, Json photo) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          height: 240,
+          width: double.infinity,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: colors.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Thumb(b, photo, fit: BoxFit.contain),
+        ),
+        const SizedBox(height: 16),
+        Text(
+          '${dateLabel(photo)} · ${sizeLabel(photo['size'])}',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: colors.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Icon(Icons.check_circle_rounded, size: 18, color: backupDoneColor(context)),
+            const SizedBox(width: 6),
+            Text(
+              '已备份',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: backupDoneColor(context),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(bottom: 8),
+          title: const Text('文件校验信息'),
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SelectableText(
+                "SHA-256\n${photo['sha256']}",
+                style: theme.textTheme.bodySmall,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget detailPanel(Backup b, Json photo) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    return SizedBox(
+      width: 360,
+      child: Material(
+        color: colors.surface,
+        shape: Border(left: BorderSide(color: colors.outlineVariant)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 14, 8, 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      photo['name'],
+                      style: theme.textTheme.titleLarge,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => setState(() => selected = null),
+                    tooltip: '关闭详情',
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(18, 6, 18, 18),
+                children: [detailInfo(b, photo)],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 0, 18, 16),
+              child: Column(
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: busy
+                          ? null
+                          : () => guard(() => detailAction(photo, 'export')),
+                      icon: const Icon(Icons.download_rounded, size: 19),
+                      label: const Text('下载原图'),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: busy
+                            ? null
+                            : () => guard(() => detailAction(photo, 'delete')),
+                        style: TextButton.styleFrom(
+                          foregroundColor: colors.error,
+                        ),
+                        child: const Text('删除云端备份'),
+                      ),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () => setState(() => selected = null),
+                        child: const Text('关闭'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget album(Backup b) {
     final theme = Theme.of(context);
     final wide = MediaQuery.sizeOf(context).width >= 760;
@@ -643,7 +802,7 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
       slivers: [
         SliverToBoxAdapter(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 22, 20, 12),
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -666,29 +825,65 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
                     ),
                     TextButton.icon(
                       onPressed: busy ? null : () => guard(pick),
-                      style: TextButton.styleFrom(
-                        backgroundColor:
-                            theme.colorScheme.surfaceContainerLowest,
-                      ),
                       icon: const Icon(Icons.add_rounded, size: 20),
                       label: const Text('选择照片'),
                     ),
                   ],
                 ),
                 if (pendingCount > 0) ...[
-                  const SizedBox(height: 16),
-                  panel(
-                    child: ListTile(
-                      leading: const Icon(Icons.cloud_upload_outlined),
-                      title: Text('$pendingCount 张照片在备份队列中'),
-                      subtitle: const Text('查看备份进度与处理状态'),
-                      trailing: const Icon(Icons.chevron_right_rounded),
+                  const SizedBox(height: 14),
+                  Material(
+                    color: theme.colorScheme.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(12),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(12),
                       onTap: () => setState(() => tab = 1),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.cloud_upload_outlined,
+                              size: 22,
+                              color: theme.colorScheme.primary,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '$pendingCount 张照片在备份队列中',
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      color: theme.colorScheme.onSurface,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '查看备份进度与处理状态',
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Icon(
+                              Icons.chevron_right_rounded,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ],
                 if (Platform.isAndroid || selection.isNotEmpty) ...[
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
@@ -707,7 +902,7 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
                           label: const Text('备份手机已有照片'),
                         ),
                       if (selection.isNotEmpty)
-                        OutlinedButton.icon(
+                        FilledButton.tonalIcon(
                           onPressed: busy
                               ? null
                               : () => guard(
@@ -742,19 +937,21 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
           )
         else
           for (final group in groups.entries) ...[
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
-                child: Text(group.key, style: theme.textTheme.titleMedium),
+            SliverPersistentHeader(
+              pinned: true,
+              delegate: _MonthHeader(
+                group.key,
+                theme.textTheme.titleMedium,
+                theme.scaffoldBackgroundColor,
               ),
             ),
             SliverPadding(
-              padding: EdgeInsets.symmetric(horizontal: wide ? 20 : 0),
+              padding: EdgeInsets.symmetric(horizontal: wide ? 20 : 2),
               sliver: SliverGrid(
                 gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: wide ? 210 : 150,
-                  crossAxisSpacing: wide ? 8 : 2,
-                  mainAxisSpacing: wide ? 8 : 2,
+                  maxCrossAxisExtent: wide ? 220 : 160,
+                  crossAxisSpacing: wide ? 6 : 2,
+                  mainAxisSpacing: wide ? 6 : 2,
                 ),
                 delegate: SliverChildBuilderDelegate(
                   (context, index) => photoTile(b, group.value[index]),
@@ -770,72 +967,55 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
 
   Widget photoTile(Backup b, Json photo) {
     final id = photo['id'] as String;
-    return Semantics(
-      label: "${photo['name']}，${dateLabel(photo)}",
-      button: true,
-      child: Tooltip(
-        message: photo['name'],
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(
-            MediaQuery.sizeOf(context).width >= 760 ? 8 : 2,
-          ),
-          child: Material(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            child: InkWell(
-              onTap: busy ? null : () => guard(() => detail(photo)),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Thumb(b, photo, key: ValueKey('${b.target}:$id')),
-                  if (Platform.isWindows)
-                    Align(
-                      alignment: Alignment.topLeft,
-                      child: Padding(
-                        padding: const EdgeInsets.all(6),
-                        child: Material(
-                          color: Colors.black54,
-                          shape: const CircleBorder(),
-                          child: Checkbox(
-                            value: selection.contains(id),
-                            side: const BorderSide(
-                              color: Colors.white,
-                              width: 1.5,
-                            ),
-                            materialTapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
-                            visualDensity: VisualDensity.compact,
-                            onChanged: (v) => setState(() {
-                              if (v == true) {
-                                selection.add(id);
-                              } else {
-                                selection.remove(id);
-                              }
-                            }),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
+    return _PhotoTile(
+      backup: b,
+      photo: photo,
+      selected: selection.contains(id),
+      active: selected?['id'] == id,
+      busy: busy,
+      onOpen: () => guard(() => detail(photo)),
+      onSelect: (v) => setState(() {
+        if (v) {
+          selection.add(id);
+        } else {
+          selection.remove(id);
+        }
+      }),
+    );
+  }
+
+  Widget infoRow(IconData icon, String title, String subtitle) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: theme.textTheme.bodyLarge),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
             ),
           ),
-        ),
+        ],
       ),
     );
   }
 
-  Widget panel({required Widget child}) => Material(
-    color: Theme.of(context).colorScheme.surfaceContainerLowest,
-    shape: RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(20),
-      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
-    ),
-    clipBehavior: Clip.antiAlias,
-    child: child,
-  );
-
   Widget queue() {
     final theme = Theme.of(context);
+    final colors = theme.colorScheme;
     final uploads = jobs.where((j) => j['stage'] != '已备份').toList();
     final pending = [...removals, ...uploads];
     return Center(
@@ -845,7 +1025,7 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 22, 20, 16),
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -854,11 +1034,13 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
                   Text(
                     '照片备份状态与队列',
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+                      color: colors.onSurfaceVariant,
                     ),
                   ),
-                  const SizedBox(height: 22),
-                  panel(
+                  const SizedBox(height: 20),
+                  Material(
+                    color: colors.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(16),
                     child: Padding(
                       padding: const EdgeInsets.all(18),
                       child: Column(
@@ -867,8 +1049,18 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
                           Row(
                             children: [
                               Icon(
-                                Icons.cloud_done_outlined,
-                                color: theme.colorScheme.primary,
+                                paused
+                                    ? Icons.pause_circle_outline
+                                    : status != null
+                                    ? Icons.error_outline
+                                    : running
+                                    ? Icons.cloud_sync_outlined
+                                    : Icons.cloud_done_outlined,
+                                color: paused
+                                    ? colors.onSurfaceVariant
+                                    : status != null
+                                    ? colors.error
+                                    : backupDoneColor(context),
                               ),
                               const SizedBox(width: 10),
                               Expanded(
@@ -884,10 +1076,29 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
                           const SizedBox(height: 10),
                           Text(
                             '已备份 ${photos.length} 张 · 待完成 ${uploads.length} 张',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: colors.onSurfaceVariant,
+                            ),
                           ),
                           if (removals.isNotEmpty)
-                            Text('待删除 ${removals.length} 张'),
-                          const SizedBox(height: 12),
+                            Text(
+                              '待删除 ${removals.length} 张',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: colors.onSurfaceVariant,
+                              ),
+                            ),
+                          if (uploads.isNotEmpty) ...[
+                            const SizedBox(height: 12),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: LinearProgressIndicator(
+                                value: photos.length /
+                                    (photos.length + uploads.length),
+                                minHeight: 6,
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 14),
                           Wrap(
                             spacing: 8,
                             runSpacing: 8,
@@ -917,22 +1128,45 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
                       child: Text(
                         '暂无等待处理的照片',
                         style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
+                          color: colors.onSurfaceVariant,
                         ),
                       ),
                     )
-                  : ListView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                  : ListView.separated(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
                       itemCount: pending.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
                       itemBuilder: (c, i) {
                         final j = pending[i];
+                        final failed = j['error'] != null;
+                        final removal = i < removals.length;
                         return ListTile(
-                          leading: Icon(
-                            j['error'] == null
-                                ? Icons.schedule
-                                : Icons.error_outline,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 4,
                           ),
-                          title: Text(j['name']),
+                          leading: Icon(
+                            failed
+                                ? Icons.error_outline
+                                : removal
+                                ? Icons.delete_outline_rounded
+                                : Icons.schedule_rounded,
+                            color: failed ? colors.error : colors.onSurfaceVariant,
+                          ),
+                          title: Text(
+                            j['name'],
+                            style: theme.textTheme.bodyLarge,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            [
+                              removal ? '待删除' : j['stage'],
+                              if (j['error'] != null) j['error'],
+                            ].join(' · '),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: failed ? colors.error : colors.onSurfaceVariant,
+                            ),
+                          ),
                           trailing: j['confirmAgain'] == true
                               ? TextButton(
                                   onPressed: busy
@@ -941,7 +1175,8 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
                                           final target = backup!.target;
                                           await store.db.delete(
                                             'removals',
-                                            where: 'target=? AND path=? AND data=?',
+                                            where:
+                                                'target=? AND path=? AND data=?',
                                             whereArgs: [
                                               target,
                                               j['path'],
@@ -953,12 +1188,6 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
                                   child: const Text('取消删除请求'),
                                 )
                               : null,
-                          subtitle: Text(
-                            [
-                              i < removals.length ? '待删除' : j['stage'],
-                              if (j['error'] != null) j['error'],
-                            ].join(' · '),
-                          ),
                         );
                       },
                     ),
@@ -971,32 +1200,38 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
 
   Widget settings(Backup b) {
     final theme = Theme.of(context);
+    final colors = theme.colorScheme;
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 820),
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 22, 20, 28),
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
           children: [
             Text('设置', style: theme.textTheme.headlineMedium),
             const SizedBox(height: 5),
             Text(
               '管理相册与备份偏好',
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+                color: colors.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 24),
             Text('已连接的相册', style: theme.textTheme.titleSmall),
             const SizedBox(height: 10),
-            panel(
+            Material(
+              color: colors.surfaceContainerLowest,
+              borderRadius: BorderRadius.circular(16),
               child: ListTile(
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 18,
                   vertical: 4,
                 ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
                 leading: Icon(
                   Icons.lock_outline_rounded,
-                  color: theme.colorScheme.primary,
+                  color: colors.onSurfaceVariant,
                 ),
                 title: Text(b.binding['name']),
                 subtitle: Text("已连接 · ${b.binding['login']}"),
@@ -1005,7 +1240,10 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
             const SizedBox(height: 24),
             Text('备份偏好', style: theme.textTheme.titleSmall),
             const SizedBox(height: 10),
-            panel(
+            Material(
+              color: colors.surfaceContainerLowest,
+              borderRadius: BorderRadius.circular(16),
+              clipBehavior: Clip.antiAlias,
               child: Column(
                 children: [
                   if (Platform.isAndroid)
@@ -1027,16 +1265,18 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
                             unawaited(runQueue());
                           }),
                   ),
-                  const ListTile(
-                    leading: Icon(Icons.image_outlined),
-                    title: Text('原图质量'),
-                    subtitle: Text('保留静态照片原始文件，缩略图单独生成。'),
+                  infoRow(
+                    Icons.image_outlined,
+                    '原图质量',
+                    '保留静态照片原始文件，缩略图单独生成。',
                   ),
-                  if (Platform.isWindows)
-                    const ListTile(
-                      leading: Icon(Icons.desktop_windows_outlined),
-                      title: Text('窗口打开时继续备份'),
-                      subtitle: Text('关闭后保留队列，下次打开继续。'),
+                  if (Platform.isWindows || Platform.isMacOS)
+                    infoRow(
+                      Platform.isWindows
+                          ? Icons.desktop_windows_outlined
+                          : Icons.laptop_mac_outlined,
+                      '窗口打开时继续备份',
+                      '关闭后保留队列，下次打开继续。',
                     ),
                 ],
               ),
@@ -1044,7 +1284,10 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
             const SizedBox(height: 24),
             Text('账户', style: theme.textTheme.titleSmall),
             const SizedBox(height: 10),
-            panel(
+            Material(
+              color: colors.surfaceContainerLowest,
+              borderRadius: BorderRadius.circular(16),
+              clipBehavior: Clip.antiAlias,
               child: Column(
                 children: [
                   ListTile(
@@ -1067,6 +1310,31 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
       ),
     );
   }
+}
+
+class _MonthHeader extends SliverPersistentHeaderDelegate {
+  _MonthHeader(this.label, this.style, this.background);
+  final String label;
+  final TextStyle? style;
+  final Color background;
+  @override
+  double get minExtent => 42;
+  @override
+  double get maxExtent => 42;
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) => Container(
+    color: background,
+    alignment: Alignment.centerLeft,
+    padding: const EdgeInsets.fromLTRB(20, 12, 20, 6),
+    child: Text(label, style: style),
+  );
+  @override
+  bool shouldRebuild(_MonthHeader old) =>
+      old.label != label || old.background != background;
 }
 
 String sizeLabel(int n) => n < 1024 * 1024
@@ -1095,12 +1363,32 @@ class _ThumbState extends State<Thumb> {
     );
   }
 
-  Widget retry(String reason, [File? invalid]) => IconButton(
-    tooltip: '$reason · 点击重新下载',
-    icon: const Icon(Icons.broken_image_outlined),
-    onPressed: () =>
-        setState(() => file = load(refresh: true, invalid: invalid)),
-  );
+  Widget retry(String reason, [File? invalid]) {
+    final colors = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: '$reason · 点击重新下载',
+      child: InkWell(
+        onTap: () =>
+            setState(() => file = load(refresh: true, invalid: invalid)),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.broken_image_outlined, color: colors.onSurfaceVariant),
+              const SizedBox(height: 6),
+              Text('加载失败', style: Theme.of(context).textTheme.bodySmall),
+              Text(
+                '点击重试',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: colors.primary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) => FutureBuilder<File>(
@@ -1109,7 +1397,26 @@ class _ThumbState extends State<Thumb> {
       if (v.hasError) {
         return retry(readable(v.error!));
       }
-      if (!v.hasData) return const Center(child: Icon(Icons.image_outlined));
+      if (!v.hasData) {
+        return Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.image_outlined,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '加载中',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        );
+      }
       return Image.file(
         v.requireData,
         fit: widget.fit,
@@ -1117,4 +1424,95 @@ class _ThumbState extends State<Thumb> {
       );
     },
   );
+}
+
+class _PhotoTile extends StatefulWidget {
+  const _PhotoTile({
+    required this.backup,
+    required this.photo,
+    required this.selected,
+    required this.active,
+    required this.busy,
+    required this.onOpen,
+    required this.onSelect,
+  });
+  final Backup backup;
+  final Json photo;
+  final bool selected, active, busy;
+  final VoidCallback onOpen;
+  final ValueChanged<bool> onSelect;
+  @override
+  State<_PhotoTile> createState() => _PhotoTileState();
+}
+
+class _PhotoTileState extends State<_PhotoTile> {
+  bool hover = false;
+  @override
+  Widget build(BuildContext context) {
+    final photo = widget.photo;
+    final id = photo['id'] as String;
+    final colors = Theme.of(context).colorScheme;
+    final wide = MediaQuery.sizeOf(context).width >= 760;
+    return Semantics(
+      label: "${photo['name']}，${dateLabel(photo)}",
+      button: true,
+      child: Tooltip(
+        message: photo['name'],
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(wide ? 6 : 3),
+            border: Border.all(
+              color: widget.selected || widget.active
+                  ? colors.primary
+                  : Colors.transparent,
+              width: 2,
+            ),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(wide ? 4 : 1.5),
+            child: Material(
+              color: colors.surfaceContainerHighest,
+              child: InkWell(
+                onTap: widget.busy ? null : widget.onOpen,
+                child: MouseRegion(
+                  onEnter: (_) => setState(() => hover = true),
+                  onExit: (_) => setState(() => hover = false),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Thumb(
+                        widget.backup,
+                        photo,
+                        key: ValueKey('${widget.backup.target}:$id'),
+                      ),
+                      if (widget.selected)
+                        ColoredBox(
+                          color: colors.primary.withValues(alpha: 0.18),
+                        ),
+                      if ((Platform.isWindows || Platform.isMacOS) &&
+                          (widget.selected || hover))
+                        Align(
+                          alignment: Alignment.topLeft,
+                          child: Padding(
+                            padding: const EdgeInsets.all(6),
+                            child: Checkbox(
+                              value: widget.selected,
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                              visualDensity: VisualDensity.compact,
+                              onChanged: (v) => widget.onSelect(v == true),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

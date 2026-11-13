@@ -46,6 +46,8 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
   int? selectedId;
   bool refreshOnReturn = false;
   String? code, error;
+  DateTime? codeDeadline;
+  Timer? codeTicker;
   bool busy = false;
   Json? tokens, user;
   List<Json>? repos;
@@ -76,6 +78,7 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    codeTicker?.cancel();
     client.close();
     clientIdInput.dispose();
     appSlugInput.dispose();
@@ -97,6 +100,7 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
         setState(() {
           busy = false;
           code = null;
+          codeDeadline = null;
         });
       }
     }
@@ -159,6 +163,11 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
         '例如 https://github.com/settings/apps/你的App名称。',
       );
     }
+    if (response.statusCode != 200) {
+      throw StateError(
+        '暂时无法确认这个 App 是否存在（HTTP ${response.statusCode}），请稍后重试。',
+      );
+    }
   }
 
   Future<void> authorize({bool persist = false}) async {
@@ -205,10 +214,21 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
       }
     }
     if (!mounted) return;
-    setState(() => code = challenge['user_code']);
     final deadline = DateTime.now().add(
       Duration(seconds: challenge['expires_in']),
     );
+    setState(() {
+      code = challenge['user_code'];
+      codeDeadline = deadline;
+    });
+    codeTicker?.cancel();
+    codeTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted || code == null) {
+        codeTicker?.cancel();
+        return;
+      }
+      setState(() {});
+    });
     var interval = challenge['interval'] as int? ?? 5;
     var failures = 0;
     while (mounted) {
@@ -302,7 +322,16 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
     Map<String, String>? query,
   }) async {
     try {
-      if (copyCode) await Clipboard.setData(ClipboardData(text: code!));
+      if (copyCode) {
+        await Clipboard.setData(ClipboardData(text: code!));
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('设备码已复制'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
       if (!mounted) return;
       if (!await launchUrl(
         Uri.https('github.com', path, query),
@@ -313,6 +342,16 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
     } catch (e) {
       if (mounted) setState(() => error = readable(e));
     }
+  }
+
+  String codeLeft() {
+    final deadline = codeDeadline;
+    if (deadline == null) return '';
+    final left = deadline.difference(DateTime.now());
+    if (left <= Duration.zero) return '设备码已过期，请重新获取。';
+    final minutes = left.inMinutes;
+    final seconds = left.inSeconds % 60;
+    return '设备码将在 $minutes:${seconds.toString().padLeft(2, '0')} 后过期';
   }
 
   void clearConfigError() {
@@ -566,6 +605,13 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
                                   .onPrimaryContainer,
                               letterSpacing: 1.5,
                             ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      codeLeft(),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
                     ),
                     const SizedBox(height: 16),

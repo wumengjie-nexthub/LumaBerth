@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -118,6 +119,11 @@ void main() {
       await tester.pumpAndSettle();
 
       if (Platform.isWindows) {
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: Offset.zero);
+        addTearDown(mouse.removePointer);
+        await mouse.moveTo(tester.getCenter(find.byTooltip('photo-a.jpg')));
+        await tester.pump();
         await tester.tap(find.byType(Checkbox).first);
         await tester.pumpAndSettle();
         expect(find.text('导出所选（1）'), findsOneWidget);

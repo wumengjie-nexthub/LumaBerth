@@ -13,7 +13,7 @@ void main() {
   runApp(const AlbumApp());
 }
 
-class AlbumApp extends StatelessWidget {
+class AlbumApp extends StatefulWidget {
   const AlbumApp({super.key});
   static Future<Store> start() async {
     if (Platform.isAndroid) await Workmanager().initialize(dispatcher);
@@ -21,16 +21,44 @@ class AlbumApp extends StatelessWidget {
   }
 
   @override
+  State<AlbumApp> createState() => _AlbumAppState();
+}
+
+class _AlbumAppState extends State<AlbumApp> {
+  Future<Store> future = AlbumApp.start();
+
+  @override
   Widget build(BuildContext context) => MaterialApp(
     title: '映格',
     debugShowCheckedModeBanner: false,
-    theme: albumTheme(),
+    theme: albumTheme(brightness: Brightness.light),
+    darkTheme: albumTheme(brightness: Brightness.dark),
     home: FutureBuilder<Store>(
-      future: start(),
+      future: future,
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return Scaffold(
-            body: Center(child: SelectableText('无法打开本机相册\n${snapshot.error}')),
+            body: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(28),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SelectableText(
+                      '无法打开本机相册\n${snapshot.error}',
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 20),
+                    FilledButton.icon(
+                      onPressed: () =>
+                          setState(() => future = AlbumApp.start()),
+                      icon: const Icon(Icons.refresh_rounded, size: 19),
+                      label: const Text('重试'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           );
         }
         if (!snapshot.hasData) {
