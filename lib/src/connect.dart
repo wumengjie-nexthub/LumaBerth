@@ -150,12 +150,15 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
     await authorize(persist: true);
   }
 
+  /// Confirms the slug names a real GitHub App.
+  ///
+  /// The anonymous API endpoint (`api.github.com/apps/<slug>`) answers 404 for
+  /// every private app — including the ones this flow tells users to create
+  /// (public=false) — so it cannot be used to validate them. The public app
+  /// page answers 404 only when the name does not exist.
   Future<void> checkApp(String slug) async {
     final response = await client
-        .get(
-          Uri.https('api.github.com', '/apps/${Uri.encodeComponent(slug)}'),
-          headers: {'Accept': 'application/vnd.github+json'},
-        )
+        .get(Uri.https('github.com', '/apps/${Uri.encodeComponent(slug)}'))
         .timeout(const Duration(seconds: 20));
     if (response.statusCode == 404) {
       throw StateError(
@@ -163,11 +166,8 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
         '例如 https://github.com/settings/apps/你的App名称。',
       );
     }
-    if (response.statusCode != 200) {
-      throw StateError(
-        '暂时无法确认这个 App 是否存在（HTTP ${response.statusCode}），请稍后重试。',
-      );
-    }
+    // Any other status means the page could not be checked; the device
+    // authorization below still validates the Client ID, so do not block setup.
   }
 
   Future<void> authorize({bool persist = false}) async {
