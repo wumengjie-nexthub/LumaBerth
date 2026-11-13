@@ -404,17 +404,37 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SizedBox(
-                  height: 220,
-                  width: 480,
+                Container(
+                  height: 260,
+                  width: double.infinity,
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                    color: Theme.of(c).colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
                   child: Thumb(b, photo, fit: BoxFit.contain),
                 ),
-                const SizedBox(height: 14),
-                Text("${dateLabel(photo)}   ·   ${sizeLabel(photo['size'])}"),
+                const SizedBox(height: 16),
+                Text(
+                  "${dateLabel(photo)}   ·   ${sizeLabel(photo['size'])}",
+                  style: Theme.of(c).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(c).colorScheme.onSurfaceVariant,
+                  ),
+                ),
                 const SizedBox(height: 8),
-                SelectableText(
-                  "SHA-256\n${photo['sha256']}",
-                  style: Theme.of(c).textTheme.bodySmall,
+                ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  childrenPadding: const EdgeInsets.only(bottom: 8),
+                  title: const Text('文件校验信息'),
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: SelectableText(
+                        "SHA-256\n${photo['sha256']}",
+                        style: Theme.of(c).textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -465,48 +485,72 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
   static const icons = [
     Icons.photo_library_outlined,
     Icons.cloud_upload_outlined,
-    Icons.tune,
+    Icons.tune_rounded,
   ];
-  static const labels = ['相册', '备份进度', '设置'];
-  Widget empty(IconData icon, String title, String text, {Widget? action}) =>
-      Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(28),
+  static const selectedIcons = [
+    Icons.photo_library_rounded,
+    Icons.cloud_upload_rounded,
+    Icons.tune_rounded,
+  ];
+  static const labels = ['照片', '备份', '设置'];
+
+  Widget empty(IconData icon, String title, String text, {Widget? action}) {
+    final theme = Theme.of(context);
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(28),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 390),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                icon,
-                size: 54,
-                color: Theme.of(context).colorScheme.primary,
+              Container(
+                width: 76,
+                height: 76,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerLowest,
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: Icon(icon, size: 36, color: theme.colorScheme.primary),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
               Text(
                 title,
-                style: Theme.of(context).textTheme.headlineSmall,
+                style: theme.textTheme.headlineSmall,
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 8),
-              Text(text, textAlign: TextAlign.center),
-              if (action != null) ...[const SizedBox(height: 22), action],
+              const SizedBox(height: 10),
+              Text(
+                text,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  height: 1.5,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              if (action != null) ...[const SizedBox(height: 24), action],
             ],
           ),
         ),
-      );
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 760;
+    final colors = Theme.of(context).colorScheme;
     final b = backup;
     final page = !loaded
         ? const Center(child: CircularProgressIndicator())
         : b == null
         ? empty(
-            Icons.photo_album_outlined,
+            Icons.photo_library_outlined,
             '你的照片备份',
             '连接 GitHub 私有仓库，即可备份照片或打开已有相册。',
             action: FilledButton.icon(
               onPressed: busy ? null : () => guard(connect),
-              icon: const Icon(Icons.link),
+              icon: const Icon(Icons.link_rounded, size: 19),
               label: const Text('连接我的 GitHub'),
             ),
           )
@@ -517,14 +561,15 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
           };
     return Scaffold(
       appBar: AppBar(
-        title: Text('泊光相册', style: Theme.of(context).textTheme.titleLarge),
+        title: const Text('映格'),
         actions: [
           if (b != null)
             IconButton(
               onPressed: busy ? null : () => guard(refresh),
               tooltip: '刷新远端目录',
-              icon: const Icon(Icons.refresh),
+              icon: const Icon(Icons.refresh_rounded),
             ),
+          const SizedBox(width: 8),
         ],
       ),
       body: Row(
@@ -538,6 +583,7 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
                 for (var i = 0; i < 3; i++)
                   NavigationRailDestination(
                     icon: Icon(icons[i]),
+                    selectedIcon: Icon(selectedIcons[i]),
                     label: Text(labels[i]),
                   ),
               ],
@@ -548,8 +594,9 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
                 if (busy) const LinearProgressIndicator(minHeight: 2),
                 if (notice != null)
                   Material(
-                    color: Theme.of(context).colorScheme.secondaryContainer,
+                    color: colors.secondaryContainer,
                     child: ListTile(
+                      leading: const Icon(Icons.info_outline_rounded),
                       title: Text(notice!),
                       trailing: IconButton(
                         onPressed: () => setState(() => notice = null),
@@ -570,258 +617,456 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
               onDestinationSelected: (v) => setState(() => tab = v),
               destinations: [
                 for (var i = 0; i < 3; i++)
-                  NavigationDestination(icon: Icon(icons[i]), label: labels[i]),
+                  NavigationDestination(
+                    icon: Icon(icons[i]),
+                    selectedIcon: Icon(selectedIcons[i]),
+                    label: labels[i],
+                  ),
               ],
             )
           : null,
     );
   }
 
-  Widget album(Backup b) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
-        child: Wrap(
-          crossAxisAlignment: WrapCrossAlignment.center,
-          spacing: 16,
-          runSpacing: 8,
-          children: [
-            Text('相册', style: Theme.of(context).textTheme.headlineMedium),
-            Text('${photos.length} 张已备份'),
-            FilledButton.icon(
-              onPressed: busy ? null : () => guard(pick),
-              icon: const Icon(Icons.add_photo_alternate_outlined),
-              label: const Text('选择照片'),
-            ),
-            if (Platform.isAndroid)
-              OutlinedButton(
-                onPressed: busy
-                    ? null
-                    : () => guard(
-                        () =>
-                            startAlbumBackup(existing: true, enableAuto: false),
-                      ),
-                child: const Text('备份手机已有照片'),
-              ),
-            if (selection.isNotEmpty)
-              OutlinedButton(
-                onPressed: busy
-                    ? null
-                    : () => guard(
-                        () => export(
-                          photos
-                              .where((v) => selection.contains(v['id']))
-                              .toList(),
-                        ),
-                      ),
-                child: Text('导出所选（${selection.length}）'),
-              ),
-          ],
-        ),
-      ),
-      Expanded(
-        child: photos.isEmpty
-            ? empty(
-                Icons.collections_outlined,
-                '相册里还没有照片',
-                '选择本机照片开始备份，或刷新已绑定仓库的目录。',
-              )
-            : GridView.builder(
-                padding: const EdgeInsets.all(16),
-                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: 210,
-                  childAspectRatio: 0.92,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
-                ),
-                itemCount: photos.length,
-                itemBuilder: (c, i) {
-                  final photo = photos[i];
-                  final id = photo['id'] as String;
-                  return Card(
-                    clipBehavior: Clip.antiAlias,
-                    margin: EdgeInsets.zero,
-                    child: InkWell(
-                      onTap: busy ? null : () => guard(() => detail(photo)),
+  Widget album(Backup b) {
+    final theme = Theme.of(context);
+    final wide = MediaQuery.sizeOf(context).width >= 760;
+    final pendingCount = jobs.where((j) => j['stage'] != '已备份').length;
+    final groups = <String, List<Json>>{};
+    for (final photo in photos) {
+      final date = DateTime.parse(photo['takenAt']).toLocal();
+      final month = '${date.year}年${date.month}月';
+      groups.putIfAbsent(month, () => []).add(photo);
+    }
+
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 22, 20, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Expanded(
-                            child: Stack(
-                              fit: StackFit.expand,
-                              children: [
-                                Thumb(
-                                  b,
-                                  photo,
-                                  key: ValueKey('${b.target}:$id'),
-                                ),
-                                if (Platform.isWindows)
-                                  Align(
-                                    alignment: Alignment.topLeft,
-                                    child: Checkbox(
-                                      value: selection.contains(id),
-                                      onChanged: (v) => setState(() {
-                                        if (v == true) {
-                                          selection.add(id);
-                                        } else {
-                                          selection.remove(id);
-                                        }
-                                      }),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.all(10),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  photo['name'],
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                Text(
-                                  dateLabel(photo),
-                                  style: Theme.of(c).textTheme.bodySmall,
-                                ),
-                              ],
+                          Text('照片', style: theme.textTheme.headlineMedium),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${photos.length} 张照片已备份',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
                             ),
                           ),
                         ],
                       ),
                     ),
-                  );
-                },
-              ),
-      ),
-    ],
-  );
-  Widget queue() {
-    final uploads = jobs.where((j) => j['stage'] != '已备份').toList();
-    final pending = [...removals, ...uploads];
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('备份进度', style: Theme.of(context).textTheme.headlineMedium),
-              const SizedBox(height: 8),
-              Text('已备份 ${photos.length} 张 · 待完成 ${uploads.length} 张'),
-              if (removals.isNotEmpty) Text('待删除 ${removals.length} 张'),
-              Text(paused ? '队列已暂停' : status ?? (running ? '正在检查队列' : '队列就绪')),
-              Wrap(
-                spacing: 8,
-                children: [
-                  TextButton(
-                    onPressed: () => guard(() => pause(!paused)),
-                    child: Text(paused ? '继续备份' : '暂停队列'),
-                  ),
-                  TextButton(
-                    onPressed: paused || running ? null : () => guard(runQueue),
-                    child: const Text('立即重试'),
+                    TextButton.icon(
+                      onPressed: busy ? null : () => guard(pick),
+                      style: TextButton.styleFrom(
+                        backgroundColor:
+                            theme.colorScheme.surfaceContainerLowest,
+                      ),
+                      icon: const Icon(Icons.add_rounded, size: 20),
+                      label: const Text('选择照片'),
+                    ),
+                  ],
+                ),
+                if (pendingCount > 0) ...[
+                  const SizedBox(height: 16),
+                  panel(
+                    child: ListTile(
+                      leading: const Icon(Icons.cloud_upload_outlined),
+                      title: Text('$pendingCount 张照片在备份队列中'),
+                      subtitle: const Text('查看备份进度与处理状态'),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => setState(() => tab = 1),
+                    ),
                   ),
                 ],
+                if (Platform.isAndroid || selection.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      if (Platform.isAndroid)
+                        OutlinedButton.icon(
+                          onPressed: busy
+                              ? null
+                              : () => guard(
+                                  () => startAlbumBackup(
+                                    existing: true,
+                                    enableAuto: false,
+                                  ),
+                                ),
+                          icon: const Icon(Icons.backup_outlined, size: 18),
+                          label: const Text('备份手机已有照片'),
+                        ),
+                      if (selection.isNotEmpty)
+                        OutlinedButton.icon(
+                          onPressed: busy
+                              ? null
+                              : () => guard(
+                                  () => export(
+                                    photos
+                                        .where(
+                                          (v) => selection.contains(v['id']),
+                                        )
+                                        .toList(),
+                                  ),
+                                ),
+                          icon: const Icon(Icons.download_outlined, size: 18),
+                          label: Text('导出所选（${selection.length}）'),
+                        ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        if (photos.isEmpty)
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: empty(
+              Icons.collections_outlined,
+              pendingCount > 0 ? '照片已加入备份队列' : '相册里还没有照片',
+              pendingCount > 0
+                  ? '备份完成后会显示在这里，点击上方可查看进度。'
+                  : '选择本机照片开始备份，或刷新已绑定仓库的目录。',
+            ),
+          )
+        else
+          for (final group in groups.entries) ...[
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+                child: Text(group.key, style: theme.textTheme.titleMedium),
               ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: ListView.builder(
-            itemCount: pending.length,
-            itemBuilder: (c, i) {
-              final j = pending[i];
-              return ListTile(
-                leading: Icon(
-                  j['error'] == null ? Icons.schedule : Icons.error_outline,
+            ),
+            SliverPadding(
+              padding: EdgeInsets.symmetric(horizontal: wide ? 20 : 0),
+              sliver: SliverGrid(
+                gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: wide ? 210 : 150,
+                  crossAxisSpacing: wide ? 8 : 2,
+                  mainAxisSpacing: wide ? 8 : 2,
                 ),
-                title: Text(j['name']),
-                trailing: j['confirmAgain'] == true
-                    ? TextButton(
-                        onPressed: busy
-                            ? null
-                            : () => guard(() async {
-                                final target = backup!.target;
-                                await store.db.delete(
-                                  'removals',
-                                  where: 'target=? AND path=? AND data=?',
-                                  whereArgs: [target, j['path'], jsonEncode(j)],
-                                );
-                                await reload();
-                              }),
-                        child: const Text('取消删除请求'),
-                      )
-                    : null,
-                subtitle: Text(
-                  [
-                    i < removals.length ? '待删除' : j['stage'],
-                    if (j['error'] != null) j['error'],
-                  ].join(' · '),
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => photoTile(b, group.value[index]),
+                  childCount: group.value.length,
                 ),
-              );
-            },
-          ),
-        ),
+              ),
+            ),
+          ],
+        const SliverToBoxAdapter(child: SizedBox(height: 24)),
       ],
     );
   }
 
-  Widget settings(Backup b) => ListView(
-    padding: const EdgeInsets.all(20),
-    children: [
-      Text('设置', style: Theme.of(context).textTheme.headlineMedium),
-      ListTile(
-        leading: const Icon(Icons.lock_outline),
-        title: Text(b.binding['name']),
-        subtitle: Text("已连接 · ${b.binding['login']}"),
-      ),
-      if (Platform.isAndroid)
-        SwitchListTile(
-          value: automatic,
-          title: const Text('自动备份新照片'),
-          subtitle: Text(scanInfo ?? '使用系统相册的新增记录发现照片'),
-          onChanged: busy ? null : (v) => guard(() => auto(v)),
+  Widget photoTile(Backup b, Json photo) {
+    final id = photo['id'] as String;
+    return Semantics(
+      label: "${photo['name']}，${dateLabel(photo)}",
+      button: true,
+      child: Tooltip(
+        message: photo['name'],
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(
+            MediaQuery.sizeOf(context).width >= 760 ? 8 : 2,
+          ),
+          child: Material(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: InkWell(
+              onTap: busy ? null : () => guard(() => detail(photo)),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Thumb(b, photo, key: ValueKey('${b.target}:$id')),
+                  if (Platform.isWindows)
+                    Align(
+                      alignment: Alignment.topLeft,
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Material(
+                          color: Colors.black54,
+                          shape: const CircleBorder(),
+                          child: Checkbox(
+                            value: selection.contains(id),
+                            side: const BorderSide(
+                              color: Colors.white,
+                              width: 1.5,
+                            ),
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                            visualDensity: VisualDensity.compact,
+                            onChanged: (v) => setState(() {
+                              if (v == true) {
+                                selection.add(id);
+                              } else {
+                                selection.remove(id);
+                              }
+                            }),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
         ),
-      SwitchListTile(
-        value: cellular,
-        title: const Text('允许移动数据上传'),
-        onChanged: busy
-            ? null
-            : (v) => guard(() async {
-                await store.set('cellular', v);
-                await schedule(store);
-                await reload();
-                unawaited(runQueue());
-              }),
       ),
-      const ListTile(
-        leading: Icon(Icons.image_outlined),
-        title: Text('原图质量'),
-        subtitle: Text('保留静态照片原始文件，缩略图单独生成。'),
-      ),
-      if (Platform.isWindows)
-        const ListTile(
-          leading: Icon(Icons.desktop_windows_outlined),
-          title: Text('窗口打开时继续备份'),
-          subtitle: Text('关闭后保留队列，下次打开继续。'),
-        ),
-      ListTile(
-        leading: const Icon(Icons.key),
-        title: const Text('重新授权'),
-        onTap: busy ? null : () => guard(connect),
-      ),
-      ListTile(
-        leading: const Icon(Icons.link_off),
-        title: const Text('断开 GitHub'),
-        onTap: busy ? null : () => guard(disconnect),
-      ),
-    ],
+    );
+  }
+
+  Widget panel({required Widget child}) => Material(
+    color: Theme.of(context).colorScheme.surfaceContainerLowest,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(20),
+      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+    ),
+    clipBehavior: Clip.antiAlias,
+    child: child,
   );
+
+  Widget queue() {
+    final theme = Theme.of(context);
+    final uploads = jobs.where((j) => j['stage'] != '已备份').toList();
+    final pending = [...removals, ...uploads];
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 820),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 22, 20, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('备份进度', style: theme.textTheme.headlineMedium),
+                  const SizedBox(height: 5),
+                  Text(
+                    '照片备份状态与队列',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  panel(
+                    child: Padding(
+                      padding: const EdgeInsets.all(18),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.cloud_done_outlined,
+                                color: theme.colorScheme.primary,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  paused
+                                      ? '队列已暂停'
+                                      : status ?? (running ? '正在检查队列' : '队列就绪'),
+                                  style: theme.textTheme.titleMedium,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            '已备份 ${photos.length} 张 · 待完成 ${uploads.length} 张',
+                          ),
+                          if (removals.isNotEmpty)
+                            Text('待删除 ${removals.length} 张'),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              OutlinedButton(
+                                onPressed: () => guard(() => pause(!paused)),
+                                child: Text(paused ? '继续备份' : '暂停队列'),
+                              ),
+                              TextButton(
+                                onPressed: paused || running
+                                    ? null
+                                    : () => guard(runQueue),
+                                child: const Text('立即重试'),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: pending.isEmpty
+                  ? Center(
+                      child: Text(
+                        '暂无等待处理的照片',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      itemCount: pending.length,
+                      itemBuilder: (c, i) {
+                        final j = pending[i];
+                        return ListTile(
+                          leading: Icon(
+                            j['error'] == null
+                                ? Icons.schedule
+                                : Icons.error_outline,
+                          ),
+                          title: Text(j['name']),
+                          trailing: j['confirmAgain'] == true
+                              ? TextButton(
+                                  onPressed: busy
+                                      ? null
+                                      : () => guard(() async {
+                                          final target = backup!.target;
+                                          await store.db.delete(
+                                            'removals',
+                                            where: 'target=? AND path=? AND data=?',
+                                            whereArgs: [
+                                              target,
+                                              j['path'],
+                                              jsonEncode(j),
+                                            ],
+                                          );
+                                          await reload();
+                                        }),
+                                  child: const Text('取消删除请求'),
+                                )
+                              : null,
+                          subtitle: Text(
+                            [
+                              i < removals.length ? '待删除' : j['stage'],
+                              if (j['error'] != null) j['error'],
+                            ].join(' · '),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget settings(Backup b) {
+    final theme = Theme.of(context);
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 820),
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 22, 20, 28),
+          children: [
+            Text('设置', style: theme.textTheme.headlineMedium),
+            const SizedBox(height: 5),
+            Text(
+              '管理相册与备份偏好',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text('已连接的相册', style: theme.textTheme.titleSmall),
+            const SizedBox(height: 10),
+            panel(
+              child: ListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 4,
+                ),
+                leading: Icon(
+                  Icons.lock_outline_rounded,
+                  color: theme.colorScheme.primary,
+                ),
+                title: Text(b.binding['name']),
+                subtitle: Text("已连接 · ${b.binding['login']}"),
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text('备份偏好', style: theme.textTheme.titleSmall),
+            const SizedBox(height: 10),
+            panel(
+              child: Column(
+                children: [
+                  if (Platform.isAndroid)
+                    SwitchListTile(
+                      value: automatic,
+                      title: const Text('自动备份新照片'),
+                      subtitle: Text(scanInfo ?? '使用系统相册的新增记录发现照片'),
+                      onChanged: busy ? null : (v) => guard(() => auto(v)),
+                    ),
+                  SwitchListTile(
+                    value: cellular,
+                    title: const Text('允许移动数据上传'),
+                    onChanged: busy
+                        ? null
+                        : (v) => guard(() async {
+                            await store.set('cellular', v);
+                            await schedule(store);
+                            await reload();
+                            unawaited(runQueue());
+                          }),
+                  ),
+                  const ListTile(
+                    leading: Icon(Icons.image_outlined),
+                    title: Text('原图质量'),
+                    subtitle: Text('保留静态照片原始文件，缩略图单独生成。'),
+                  ),
+                  if (Platform.isWindows)
+                    const ListTile(
+                      leading: Icon(Icons.desktop_windows_outlined),
+                      title: Text('窗口打开时继续备份'),
+                      subtitle: Text('关闭后保留队列，下次打开继续。'),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text('账户', style: theme.textTheme.titleSmall),
+            const SizedBox(height: 10),
+            panel(
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.key_outlined),
+                    title: const Text('重新授权'),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: busy ? null : () => guard(connect),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.link_off_rounded),
+                    title: const Text('断开 GitHub'),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: busy ? null : () => guard(disconnect),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 String sizeLabel(int n) => n < 1024 * 1024
