@@ -90,3 +90,9 @@ flutter test test/backup_test.dart test/media_scan_test.dart test/connection_vie
 备份测试使用临时 SQLite 数据库和模拟 GitHub 接口，覆盖中断、摘要不符、换组、目录恢复、限流、下载及删除。界面测试覆盖 360 与 1280 像素宽度的首次连接流程（含自填 App、App 名称校验与错误提示），以及 320 与 1280 像素宽度的相册网格、照片详情与备份队列。
 
 真实 GitHub App 授权、Android 相册授权与锁屏调度、HEIC 原件元数据，以及 Android ↔ Windows 的双向恢复仍需实机验收。可用一张测试照片做双向恢复，分别比对源文件和另一端导出文件的大小与 SHA-256。
+
+## 许可证
+
+客户端源码以 [MIT 许可证](LICENSE) 发布：可以自由使用、修改、分发和商用，保留版权与许可声明即可，不提供任何担保。
+
+该许可只覆盖本仓库的源代码与打包脚本。使用者自己私有仓库里的照片、目录文件、Release 附件，以及自行创建或安装的 GitHub App 都不属于本项目，也不受此许可约束。第三方 Dart 与 Flutter 依赖各自遵循其原始许可证。
