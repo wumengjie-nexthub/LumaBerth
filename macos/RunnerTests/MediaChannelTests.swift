@@ -103,3 +103,66 @@ struct MediaChannelTests {
     }
   }
 }
+
+struct AlbumScanTests {
+  @Test func parsesThreeStringBounds() throws {
+    let window = try #require(parseWindow(["100", "150", "200"]))
+    #expect(window.floor == 100)
+    #expect(window.previous == 150)
+    #expect(window.current == 200)
+  }
+
+  @Test func rejectsMalformedBounds() {
+    #expect(parseWindow([]) == nil)
+    #expect(parseWindow(["1", "2"]) == nil)
+    #expect(parseWindow(["a", "b", "c"]) == nil)
+  }
+
+  @Test func startingFromNowSkipsExistingPhotos() throws {
+    // Opt-in floor and previous generation are the same: only later changes count.
+    let window = try #require(parseWindow(["100", "100", "200"]))
+    #expect(window.includes(modified: 100) == false)  // already there at opt-in
+    #expect(window.includes(modified: 101))
+    #expect(window.includes(modified: 200))
+    #expect(window.includes(modified: 201) == false)  // beyond this snapshot
+    #expect(window.includes(modified: 99) == false)
+  }
+
+  @Test func includingExistingAcceptsTheWholeLibrary() throws {
+    let window = try #require(parseWindow(["-1", "-1", "200"]))
+    #expect(window.includes(modified: 0))
+    #expect(window.includes(modified: 1))
+    #expect(window.includes(modified: 200))
+    #expect(window.includes(modified: 201) == false)
+  }
+
+  @Test func unchangedGenerationYieldsNothing() throws {
+    let window = try #require(parseWindow(["200", "200", "200"]))
+    #expect(window.includes(modified: 200) == false)
+  }
+
+  @Test func floorExcludesPreOptInEdits() throws {
+    // A photo edited after opt-in must not re-enter through an older floor.
+    let window = try #require(parseWindow(["500", "200", "600"]))
+    #expect(window.includes(modified: 300) == false)
+    #expect(window.includes(modified: 550))
+  }
+
+  @Test func millisRoundTripsEpoch() {
+    #expect(millis(nil) == 0)
+    #expect(millis(Date(timeIntervalSince1970: 1)) == 1000)
+  }
+
+  @Test func permissionNamesCoverEveryStatus() {
+    #expect(permissionName(.authorized) == "full")
+    #expect(permissionName(.limited) == "partial")
+    #expect(permissionName(.denied) == "none")
+    #expect(permissionName(.notDetermined) == "none")
+    #expect(permissionName(.restricted) == "none")
+  }
+
+  @Test func emptyLibraryReportsZeroGeneration() {
+    // Reading an empty library must not crash; the value is a plain cursor.
+    #expect(libraryGeneration() >= 0)
+  }
+}

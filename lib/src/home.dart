@@ -58,7 +58,10 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
             !paused &&
             (jobs.any((j) => j['stage'] != '已备份' && j['error'] == null) ||
                 removals.any((r) => r['error'] == null) ||
-                status != null)) {
+                status != null ||
+                // Android schedules scans through WorkManager; desktop scans
+                // while the window is open.
+                (automatic && !Platform.isAndroid))) {
           unawaited(runQueue());
         }
       }
@@ -273,7 +276,7 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
     required bool enableAuto,
   }) async {
     final b = backup!;
-    await dialogs.invokeMethod('permission');
+    if (Platform.isAndroid) await dialogs.invokeMethod('permission');
     if (await media.invokeMethod('permission') != 'full') {
       throw StateError('备份整个相册需要完整照片权限。你也可以用「选择照片」备份部分照片。');
     }
@@ -288,7 +291,7 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
         context: context,
         builder: (c) => StatefulBuilder(
           builder: (c, update) => AlertDialog(
-            title: const Text('备份手机已有照片？'),
+            title: const Text('备份已有照片？'),
             content: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -882,13 +885,13 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
                     ),
                   ),
                 ],
-                if (Platform.isAndroid || selection.isNotEmpty) ...[
+                if (albumScanSupported || selection.isNotEmpty) ...[
                   const SizedBox(height: 12),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: [
-                      if (Platform.isAndroid)
+                      if (albumScanSupported)
                         OutlinedButton.icon(
                           onPressed: busy
                               ? null
@@ -899,7 +902,9 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
                                   ),
                                 ),
                           icon: const Icon(Icons.backup_outlined, size: 18),
-                          label: const Text('备份手机已有照片'),
+                          label: Text(
+                            Platform.isAndroid ? '备份手机已有照片' : '备份系统相册',
+                          ),
                         ),
                       if (selection.isNotEmpty)
                         FilledButton.tonalIcon(
@@ -1246,7 +1251,7 @@ class _AlbumHomeState extends State<AlbumHome> with WidgetsBindingObserver {
               clipBehavior: Clip.antiAlias,
               child: Column(
                 children: [
-                  if (Platform.isAndroid)
+                  if (albumScanSupported)
                     SwitchListTile(
                       value: automatic,
                       title: const Text('自动备份新照片'),

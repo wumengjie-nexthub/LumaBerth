@@ -15,7 +15,17 @@ import 'store.dart';
 
 const media = MethodChannel('photoalbum/media');
 const dialogs = MethodChannel('photoalbum/dialogs');
-const oneWay = '已备份的照片会保留在你的私有仓库。从手机相册删除照片，不会删除云端原图。请等照片显示「已备份」后，再清理本机原片。';
+const oneWay = '已备份的照片会保留在你的私有仓库。从系统相册删除照片，不会删除云端原图。请等照片显示「已备份」后，再清理本机原片。';
+
+/// Platforms whose system album can be scanned for automatic backup: Android
+/// through MediaStore, macOS through the Photos library.
+bool get albumScanSupported => Platform.isAndroid || Platform.isMacOS;
+
+/// Album sources are read through the media plugin: MediaStore URIs on Android
+/// and PHAsset identifiers on macOS. Desktop file pickers hand over real paths,
+/// which are copied instead.
+bool albumSource(String source) =>
+    Platform.isAndroid || (Platform.isMacOS && !p.context.isAbsolute(source));
 Json plainMap(dynamic value) => jsonDecode(jsonEncode(value)) as Json;
 String readable(Object e) => e is PlatformException
     ? (e.message ?? e.code)
@@ -209,7 +219,7 @@ class Backup {
     if ((job['size'] ?? 0) >= maxAssetBytes) throw StateError('原片必须小于 2 GiB');
     final source = job['source'] as String;
     int? taken;
-    if (Platform.isAndroid) {
+    if (albumSource(source)) {
       taken = await media.invokeMethod<int>('prepare', {
         'source': source,
         'original': original.path,

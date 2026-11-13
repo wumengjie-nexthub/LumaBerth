@@ -10,6 +10,7 @@ func RegisterMediaChannel(messenger: FlutterBinaryMessenger) {
   let channel = FlutterMethodChannel(
     name: "photoalbum/media", binaryMessenger: messenger)
   channel.setMethodCallHandler { call, result in
+    if registerAlbumMethod(call, result) { return }
     guard call.method == "thumbnail",
       let args = call.arguments as? [String: Any],
       let source = args["source"] as? String,
