@@ -130,7 +130,7 @@ void RegisterMediaChannel(flutter::BinaryMessenger* messenger) {
     const auto& fields = std::get<flutter::EncodableMap>(*call.arguments());
     const HRESULT hr = Thumbnail(Path(fields, "source"), Path(fields, "thumb"));
     if (FAILED(hr)) {
-      result->Error("codec", "Windows could not decode the photo. For HEIC, install HEIF Image Extensions.");
+      result->Error("codec", "无法解码这张照片。HEIC 等格式需要在 Windows 安装「HEIF 图像扩展」后再试。");
       return;
     }
     result->Success(TakenAt(Path(fields, "metadata")));

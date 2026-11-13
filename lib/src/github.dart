@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
 import 'catalog.dart';
+import 'text.dart';
 
 class ApiError implements Exception {
   ApiError(this.status, this.message, [this.retryAt]);
@@ -88,7 +89,7 @@ class Github {
 
       final subscription = uploadStops?.call().listen(
         stop,
-        onError: (Object e) => stop(e.toString()),
+        onError: (Object e) => stop(readable(e)),
       );
       final timeout = Timer(
         const Duration(minutes: 10),

@@ -7,10 +7,10 @@ import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:uuid/uuid.dart';
 
-import 'backup.dart';
 import 'catalog.dart';
 import 'github.dart';
 import 'store.dart';
+import 'text.dart';
 
 const _customClientId = String.fromEnvironment('GITHUB_CLIENT_ID');
 const _customAppSlug = String.fromEnvironment('GITHUB_APP_SLUG');
@@ -156,18 +156,27 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
   /// every private app — including the ones this flow tells users to create
   /// (public=false) — so it cannot be used to validate them. The public app
   /// page answers 404 only when the name does not exist.
+  ///
+  /// This check is advisory. It must never stop setup: the device authorization
+  /// below validates the Client ID itself, and a slow, throttled or blocked
+  /// network would otherwise strand first-time users here. A HEAD request keeps
+  /// it to a few hundred bytes instead of the whole page.
   Future<void> checkApp(String slug) async {
-    final response = await client
-        .get(Uri.https('github.com', '/apps/${Uri.encodeComponent(slug)}'))
-        .timeout(const Duration(seconds: 20));
+    final http.Response response;
+    try {
+      response = await client
+          .head(Uri.https('github.com', '/apps/${Uri.encodeComponent(slug)}'))
+          .timeout(const Duration(seconds: 8));
+    } catch (_) {
+      // Offline, timing out or blocked: let the device flow decide.
+      return;
+    }
     if (response.statusCode == 404) {
       throw StateError(
         'GitHub 上没有找到这个 App。请检查链接末尾的名称，'
         '例如 https://github.com/settings/apps/你的App名称。',
       );
     }
-    // Any other status means the page could not be checked; the device
-    // authorization below still validates the Client ID, so do not block setup.
   }
 
   Future<void> authorize({bool persist = false}) async {
@@ -265,7 +274,7 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
         continue;
       }
       if (response['access_token'] == null) {
-        throw StateError('设备授权未完成：${response['error'] ?? '请重试'}');
+        throw StateError(oauthErrorLabel(response['error']));
       }
       setState(() {
         tokens = response;

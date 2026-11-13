@@ -107,7 +107,8 @@ class AlbumMediaPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                 }
                 main.post { result.success(value) }
             } catch (e: Exception) {
-                main.post { result.error("media", e.localizedMessage ?: "照片读取失败", null) }
+                // System exception text is English and means nothing to the user.
+                main.post { result.error("media", "照片读取失败，请重试", null) }
             }
         }
     }

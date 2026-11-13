@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -50,7 +51,7 @@ void main() {
       final store = EmptyStore();
       var challenges = 0;
       final client = MockClient((request) async {
-        if (request.method == 'GET' && request.url.path == '/apps/personal-app') {
+        if (request.url.path == '/apps/personal-app') {
           // Private apps 404 on api.github.com; the page is the only check.
           return http.Response('<html>personal-app</html>', 200);
         }
@@ -173,7 +174,7 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       final store = EmptyStore();
       final client = MockClient((request) async {
-        if (request.method == 'GET' && request.url.path == '/apps/personal-app') {
+        if (request.url.path == '/apps/personal-app') {
           // Private apps 404 on api.github.com; the page is the only check.
           return http.Response('<html>personal-app</html>', 200);
         }
@@ -239,7 +240,7 @@ void main() {
     final store = EmptyStore();
     var challenges = 0;
     final client = MockClient((request) async {
-      if (request.method == 'GET' && request.url.path.startsWith('/apps/')) {
+      if (request.url.path.startsWith('/apps/')) {
         final slug = request.url.pathSegments.last;
         return slug == 'personal-app'
             ? http.Response('<html>personal-app</html>', 200)
@@ -306,7 +307,7 @@ void main() {
         anonymousApiCalls++;
         return http.Response('{"message":"Not Found"}', 404);
       }
-      if (request.method == 'GET' && request.url.path == '/apps/private-app') {
+      if (request.url.path == '/apps/private-app') {
         return http.Response('private-app is a private GitHub App.', 200);
       }
       expect(request.url.path, '/login/device/code');
@@ -337,6 +338,48 @@ void main() {
       expect(find.textContaining('GitHub 上没有找到这个 App'), findsNothing);
       expect(find.text('TEST-1234'), findsOneWidget);
       expect(anonymousApiCalls, 0);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 5));
+    }, () => client);
+  });
+  testWidgets('校验超时不阻断连接：网络抖动时仍能继续', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(360, 720);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = EmptyStore();
+    final client = MockClient((request) async {
+      if (request.url.path.startsWith('/apps/')) {
+        // 慢速或被拦截的网络：辅助校验拿不到结果。
+        throw TimeoutException('slow', const Duration(seconds: 8));
+      }
+      expect(request.url.path, '/login/device/code');
+      return http.Response(
+        jsonEncode({
+          'device_code': 'device-test',
+          'user_code': 'TEST-1234',
+          'interval': 5,
+          'expires_in': 900,
+        }),
+        200,
+      );
+    });
+
+    await http.runWithClient(() async {
+      await tester.pumpWidget(MaterialApp(home: ConnectPage(store)));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('我已经创建过 GitHub App'));
+      await tester.tap(find.text('我已经创建过 GitHub App'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).at(0), 'client-test');
+      await tester.enterText(find.byType(TextField).at(1), 'slow-app');
+      await tester.ensureVisible(find.text('保存并继续'));
+      await tester.tap(find.text('保存并继续'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.textContaining('TimeoutException'), findsNothing);
+      expect(find.text('TEST-1234'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 5));
     }, () => client);

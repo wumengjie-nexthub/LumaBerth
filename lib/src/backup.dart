@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -12,6 +13,7 @@ import 'package:uuid/uuid.dart';
 import 'catalog.dart';
 import 'github.dart';
 import 'store.dart';
+import 'text.dart';
 
 const media = MethodChannel('photoalbum/media');
 const dialogs = MethodChannel('photoalbum/dialogs');
@@ -27,9 +29,6 @@ bool get albumScanSupported => Platform.isAndroid || Platform.isMacOS;
 bool albumSource(String source) =>
     Platform.isAndroid || (Platform.isMacOS && !p.context.isAbsolute(source));
 Json plainMap(dynamic value) => jsonDecode(jsonEncode(value)) as Json;
-String readable(Object e) => e is PlatformException
-    ? (e.message ?? e.code)
-    : e.toString().replaceFirst('Bad state: ', '');
 
 // Only mounted volumes advance. The floor is the user's original opt-in boundary.
 Json advanceMediaCursor(Json previous, Json mounted) => {

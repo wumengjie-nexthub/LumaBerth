@@ -8,6 +8,7 @@ import 'backup.dart';
 import 'catalog.dart';
 import 'github.dart';
 import 'store.dart';
+import 'text.dart';
 
 @pragma('vm:entry-point')
 void dispatcher() {

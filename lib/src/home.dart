@@ -14,6 +14,7 @@ import 'connect.dart';
 import 'github.dart';
 import 'scheduler.dart';
 import 'store.dart';
+import 'text.dart';
 import 'theme.dart';
 
 class AlbumHome extends StatefulWidget {
