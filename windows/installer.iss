@@ -8,7 +8,7 @@
 
 [Setup]
 AppId={{69D62926-8AC5-4A81-986E-906704A8B97E}
-AppName=LumaBerth
+AppName=映格
 AppVersion={#AppVersion}
 AppPublisher=LumaBerth
 AppPublisherURL=https://github.com/wumengjie-nexthub/LumaBerth
@@ -37,7 +37,7 @@ Source: "{#Bundle}\data\*"; DestDir: "{app}\data"; Flags: ignoreversion recurses
 Source: "{#VCRedistDir}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{userprograms}\LumaBerth"; Filename: "{app}\LumaBerth.exe"; WorkingDir: "{app}"
+Name: "{userprograms}\映格"; Filename: "{app}\LumaBerth.exe"; WorkingDir: "{app}"
 
 [Run]
-Filename: "{app}\LumaBerth.exe"; Description: "{cm:LaunchProgram,LumaBerth}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\LumaBerth.exe"; Description: "{cm:LaunchProgram,映格}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent

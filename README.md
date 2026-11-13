@@ -1,4 +1,4 @@
-# LumaBerth · 泊光相册
+# 映格（LumaBerth）
 
 Android 与 Windows 的 Flutter 客户端原型。两端直接连接用户自己的 GitHub 私有仓库，共用 Dart 备份队列、远端目录和恢复逻辑。
 

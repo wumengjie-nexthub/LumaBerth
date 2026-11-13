@@ -27,7 +27,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"LumaBerth \u00b7 \u6cca\u5149\u76f8\u518c", origin, size)) {
+  if (!window.Create(L"\u6620\u683c", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
