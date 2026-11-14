@@ -55,6 +55,9 @@ jobs:
       - run: flutter pub get --enforce-lockfile
       - run: flutter analyze --no-pub
       - run: flutter test --no-pub
+      # xcodebuild reads the ephemeral file lists that only a Flutter build
+      # writes, so build once for the native test step.
+      - run: flutter build macos --debug --no-pub
       - run: xcodebuild test -project macos/Runner.xcodeproj -scheme Runner -destination 'platform=macOS'
       - run: macos/package.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
