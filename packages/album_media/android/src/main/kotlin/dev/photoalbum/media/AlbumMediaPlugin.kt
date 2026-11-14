@@ -64,13 +64,35 @@ class AlbumMediaPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         }
         return result
     }
+    // Losing the photo grant and a photo disappearing are different problems.
+    // Reporting both as "原片已移除" sends people looking for a photo that is
+    // still there. MediaStore URIs depend on the runtime permission, while
+    // picker URIs carry a per-file grant of their own.
+    private fun unreadable(uri: Uri): Nothing {
+        if (uri.authority == MediaStore.AUTHORITY && permission() != "full") {
+            throw IllegalStateException("需要照片权限才能继续备份，请在系统设置中允许映格访问照片")
+        }
+        throw IllegalStateException("这张照片已不在系统相册中")
+    }
+
     private fun metadata(uri: Uri): Map<String, Any?> {
         val resolver = context.contentResolver
         val projection = arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
-        return resolver.query(uri, projection, null, null, null)?.use {
-            check(it.moveToFirst()) { "原片已移除，请重新选择" }
-            mapOf("source" to uri.toString(), "name" to it.getString(0), "size" to it.getLong(1))
-        } ?: error("无法读取所选照片")
+        val cursor = try {
+            resolver.query(uri, projection, null, null, null)
+        } catch (e: SecurityException) {
+            unreadable(uri)
+        }
+        cursor?.use {
+            if (it.moveToFirst()) {
+                return mapOf(
+                    "source" to uri.toString(),
+                    "name" to it.getString(0),
+                    "size" to it.getLong(1),
+                )
+            }
+        }
+        unreadable(uri)
     }
     private fun prepare(call: MethodCall): Long? {
         val source = Uri.parse(call.argument<String>("source"))
@@ -80,9 +102,14 @@ class AlbumMediaPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
             check(granted(Manifest.permission.ACCESS_MEDIA_LOCATION)) { "保留原片元数据需要照片位置信息权限，请重新授权" }
             MediaStore.setRequireOriginal(source)
         } else source
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            file.outputStream().use { output -> input.copyTo(output) }
-        } ?: error("无法读取原片，请重新选择或授权")
+        val input = try {
+            context.contentResolver.openInputStream(uri)
+        } catch (e: SecurityException) {
+            unreadable(uri)
+        } ?: unreadable(uri)
+        input.use { stream ->
+            file.outputStream().use { output -> stream.copyTo(output) }
+        }
         check(file.length() < 2147483648L) { "原片必须小于 2 GiB" }
         val bitmap = ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, info, _ ->
             val ratio = minOf(1.0, 480.0 / max(info.size.width, info.size.height))

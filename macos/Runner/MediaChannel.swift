@@ -24,6 +24,13 @@ func RegisterMediaChannel(messenger: FlutterBinaryMessenger) {
       do {
         let taken = try MakeThumbnail(source: source, thumb: thumb, metadata: metadata)
         DispatchQueue.main.async { result(taken) }
+      } catch ThumbnailError.missing {
+        DispatchQueue.main.async {
+          result(FlutterError(
+            code: "media",
+            message: "这张照片已不在原来的位置，请重新选择",
+            details: nil))
+        }
       } catch {
         DispatchQueue.main.async {
           result(FlutterError(
@@ -37,12 +44,17 @@ func RegisterMediaChannel(messenger: FlutterBinaryMessenger) {
 }
 
 enum ThumbnailError: Error {
+  case missing
   case unreadable
   case encode
 }
 
 func MakeThumbnail(source: String, thumb: String, metadata: String) throws -> NSNumber? {
   let sourceURL = URL(fileURLWithPath: source)
+  // A photo the user moved or deleted is not a decoder problem.
+  guard FileManager.default.fileExists(atPath: source) else {
+    throw ThumbnailError.missing
+  }
   guard let imageSource = CGImageSourceCreateWithURL(sourceURL as CFURL, nil) else {
     throw ThumbnailError.unreadable
   }

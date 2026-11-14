@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <string>
+#include <system_error>
 
 using Microsoft::WRL::ComPtr;
 using Value = flutter::EncodableValue;
@@ -22,6 +23,12 @@ std::wstring Path(const flutter::EncodableMap& fields, const char* key) {
 }
 
 HRESULT Thumbnail(const std::wstring& path, const std::wstring& output) {
+  // A photo the user moved or deleted is not a codec problem, and reporting it
+  // as one sends people off to install extensions they do not need.
+  std::error_code probe;
+  if (!std::filesystem::exists(path, probe) || std::filesystem::is_directory(path, probe)) {
+    return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+  }
   ComPtr<IWICImagingFactory> factory;
   ComPtr<IWICBitmapDecoder> decoder;
   ComPtr<IWICBitmapFrameDecode> source;
@@ -130,6 +137,10 @@ void RegisterMediaChannel(flutter::BinaryMessenger* messenger) {
     const auto& fields = std::get<flutter::EncodableMap>(*call.arguments());
     const HRESULT hr = Thumbnail(Path(fields, "source"), Path(fields, "thumb"));
     if (FAILED(hr)) {
+      if (hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) {
+        result->Error("media", "这张照片已不在原来的位置，请重新选择");
+        return;
+      }
       result->Error("codec", "无法解码这张照片。HEIC 等格式需要在 Windows 安装「HEIF 图像扩展」后再试。");
       return;
     }
