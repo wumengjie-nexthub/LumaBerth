@@ -51,7 +51,7 @@ Android 11 及以上使用通用 APK，64 位 Windows 使用 Setup.exe，macOS 1
 
 Android 正式包在运行 `flutter build apk --release` 前需要设置 `LUMABERTH_KEYSTORE`（PKCS12 密钥库的绝对路径）和 `LUMABERTH_SIGNING_PASSWORD`（密钥库和别名 `lumaberth` 的密码）。后续更新须复用同一签名密钥并递增 `pubspec.yaml` 中的构建号。官方签名证书 SHA-256 为 `6274ecef5d05b6b6b07fa28f16d74e30799f425d37fca3ab1851bbcd145d06e9`，可用 Android SDK 的 `apksigner verify --print-certs` 核对。自行构建可使用自己的签名。
 
-Windows 在 `flutter build windows --release` 后，用 Inno Setup 7 编译 `windows/installer.iss`。传入 `/DAppVersion=版本号` 和 `/DVCRedistDir=当前 MSVC 版本的 x64 Microsoft.VC*.CRT 目录`。产物位于 `build/dist`，包含 Flutter 数据、插件和 Visual C++ 运行库，按当前用户安装。
+Windows 在 `flutter build windows --release` 后，用 Inno Setup 7 编译 `windows/installer.iss`。传入 `/DAppVersion=版本号` 和 `/DVCRedistDir=当前 MSVC 版本的 x64 Microsoft.VC*.CRT 目录`。产物位于 `build/dist`，包含 Flutter 数据、插件和 Visual C++ 运行库，按当前用户安装。安装包未签名，Windows SmartScreen 首次运行会提示「未知发布者」，需选择「仍要运行」；公开分发建议先用代码签名证书签名。
 
 macOS 运行 `macos/package.sh`：先 `flutter build macos --release`，再用 hdiutil 生成 `build/dist/LumaBerth-版本号-macOS-架构.dmg`。传入 `--sign "Developer ID Application: ..."` 可按 hardened runtime 签名；公开分发前还需用 `xcrun notarytool submit ... --wait` 公证并 `xcrun stapler staple` 装订。未签名的包首次打开需在「系统设置 → 隐私与安全性」中允许运行。
 
