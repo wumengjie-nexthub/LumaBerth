@@ -186,7 +186,14 @@ void main() {
       if (!existing) {
         await tester.tap(find.text('创建私有相册'));
         await tester.pump();
+        expect(find.textContaining('不用勾选 Add a README'), findsOneWidget);
         await tester.tap(find.text('前往 GitHub 创建私库'));
+        await tester.pump();
+        final created = Uri.parse(events.last);
+        expect(created.host, 'github.com');
+        expect(created.path, '/new');
+        expect(created.queryParameters['name'], 'yingge-photos');
+        expect(created.queryParameters['visibility'], 'private');
         await tester.tap(find.text('已创建，继续授权'));
         await tester.pump();
         await tester.tap(find.text('前往 GitHub 选择私库'));
@@ -194,7 +201,6 @@ void main() {
           events.last,
           'https://github.com/apps/demo-app/installations/new',
         );
-        expect(events, contains('https://github.com/new'));
         installed = true;
         await tester.tap(find.text('刷新可用仓库'));
         await tester.pump();
@@ -207,4 +213,104 @@ void main() {
       expect(find.text('相册首页'), findsOneWidget);
     });
   }
+
+  testWidgets('空仓库连接时自动提交第一份 README', (tester) async {
+    final store = _RecordingStore();
+    var initialized = false;
+    final readmes = <String>[];
+    final repo = {
+      'id': 3,
+      'full_name': 'demo/new-album',
+      'private': true,
+      'default_branch': 'main',
+      'permissions': {'push': true},
+    };
+    final client = MockClient((request) async {
+      http.Response reply(Object value, [int status = 200]) =>
+          http.Response(jsonEncode(value), status);
+      final path = request.url.path;
+      if (path == '/login/device/code') {
+        return reply({
+          'user_code': 'ABCD-1234',
+          'device_code': 'd',
+          'expires_in': 900,
+          'interval': 1,
+        });
+      }
+      if (path == '/login/oauth/access_token') {
+        return reply({'access_token': 'ok'});
+      }
+      if (path == '/user') return reply({'id': 1, 'login': 'demo'});
+      if (path == '/user/installations') {
+        return reply({
+          'installations': [
+            {
+              'id': 7,
+              'permissions': {'contents': 'write'},
+            },
+          ],
+        });
+      }
+      if (path == '/user/installations/7/repositories') {
+        return reply({
+          'repositories': [repo],
+        });
+      }
+      if (path == '/repositories/3') return reply(repo);
+      if (path == '/repos/demo/new-album/branches/main') {
+        // 未开启 Add a README 的空仓库：第一次检查没有默认分支。
+        return initialized
+            ? reply({'name': 'main'})
+            : reply({'message': 'Git Repository is empty.'}, 409);
+      }
+      if (path == '/repos/demo/new-album/contents/README.md' &&
+          request.method == 'PUT') {
+        initialized = true;
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        readmes.add(utf8.decode(base64Decode(body['content'] as String)));
+        return reply({
+          'commit': {'sha': 'first'},
+        }, 201);
+      }
+      throw StateError('Unexpected request ${request.url}');
+    });
+    const launcher = MethodChannel('plugins.flutter.io/url_launcher');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      launcher,
+      (_) async => true,
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        launcher,
+        null,
+      ),
+    );
+
+    await http.runWithClient(
+      () => tester.pumpWidget(
+        MaterialApp(
+          initialRoute: '/connect',
+          routes: {
+            '/': (_) => const Scaffold(body: Text('相册首页')),
+            '/connect': (_) =>
+                ConnectPage(store, clientId: 'client-1', appSlug: 'demo-app'),
+          },
+        ),
+      ),
+      () => client,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(find.text('demo/new-album'), findsOneWidget);
+    expect(initialized, isFalse);
+
+    await tester.tap(find.text('确认使用'));
+    await tester.pumpAndSettle();
+
+    expect(initialized, isTrue);
+    expect(readmes.single, contains('映格'));
+    expect(store.bound, 'demo/new-album');
+    expect(find.text('相册首页'), findsOneWidget);
+  });
 }

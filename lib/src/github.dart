@@ -8,6 +8,19 @@ import 'package:http/http.dart' as http;
 import 'catalog.dart';
 import 'text.dart';
 
+// First commit of a new album repository. People who open the repository on
+// github.com see this file, so it explains the layout in plain words.
+const _firstReadme = '''
+# 映格照片相册
+
+这个私有仓库由映格（LumaBerth）自动维护，用来保存你的照片。
+
+- 请保持仓库为 Private（私有）。改成公开会连同照片一起公开。
+- 照片原件保存在 Releases 附件中，相册目录位于 `photo-album/v1/` 下。
+- 请不要手动修改或删除这里的文件。整理照片请回到映格操作，否则相册可能对不上。
+- 想删除照片，请在映格的照片详情里删除；直接删仓库里的文件会让其他设备显示异常。
+''';
+
 class ApiError implements Exception {
   ApiError(this.status, this.message, [this.retryAt]);
   final int status;
@@ -230,18 +243,55 @@ class Github {
         value['permissions']?['push'] != true) {
       throw StateError('请选择已授权、可写的专用私有仓库');
     }
+    final name = value['full_name'] as String;
+    final branch = value['default_branch'] as String;
+    if (!await hasBranch(name, branch)) {
+      await initialize(name);
+      if (!await hasBranch(name, branch)) {
+        throw StateError('相册仓库还没有默认分支，请稍后重试，或在 GitHub 仓库首页添加一个 README。');
+      }
+    }
+    return value;
+  }
+
+  Future<bool> hasBranch(String fullName, String branch) async {
+    try {
+      await json('GET', '/repos/$fullName/branches/$branch');
+      return true;
+    } on ApiError catch (e) {
+      if (e.status == 404 || e.status == 409) return false;
+      rethrow;
+    }
+  }
+
+  /// Creates the first commit of a repository that has no branch yet.
+  ///
+  /// A repository created on github.com without a README is completely empty:
+  /// it has a default branch name but no commit on it, so every later write
+  /// fails and the user would have to go back to GitHub and initialize it by
+  /// hand. The Contents API makes that first commit for them. Naming no branch
+  /// lets GitHub create the repository's default branch with this commit.
+  Future<void> initialize(String fullName) async {
     try {
       await json(
-        'GET',
-        '/repos/${value['full_name']}/branches/${value['default_branch']}',
+        'PUT',
+        '/repos/$fullName/contents/README.md',
+        body: {
+          'message': '初始化映格相册',
+          'content': base64Encode(utf8.encode(_firstReadme)),
+        },
       );
     } on ApiError catch (e) {
-      if (e.status == 404 || e.status == 409) {
-        throw StateError('请先在 GitHub 为仓库初始化 README');
+      // Another device, or the user in a browser, may have just created the
+      // first commit; the caller rechecks the branch instead of failing.
+      if (e.status == 409 || e.status == 422) return;
+      if (e.status == 403 || e.status == 404) {
+        throw StateError(
+          '无法初始化相册仓库，请确认 GitHub App 拥有 Contents: Read and write 权限',
+        );
       }
       rethrow;
     }
-    return value;
   }
 
   Future<Json?> optional(String path, {Map<String, String>? query}) async {

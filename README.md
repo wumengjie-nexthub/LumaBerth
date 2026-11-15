@@ -16,7 +16,7 @@ flutter run -d macos
 flutter run -d <Android设备ID>
 ```
 
-首次使用：每位使用者先创建自己的 GitHub App，在映格中填写其 Client ID 和 App 设置页链接，然后复制设备码并前往 GitHub 确认登录。已有授权的私库可以直接选择；新用户可创建照片专用私库（选择 Private 并开启 Add a README），再在 GitHub 选择 Only select repositories，仅授权该私库。回到应用确认账号和库名，点「确认使用」即进入相册首页。
+首次使用：每位使用者先创建自己的 GitHub App，在映格中填写其 Client ID 和 App 设置页链接，然后复制设备码并前往 GitHub 确认登录。已有授权的私库可以直接选择；新用户可创建照片专用私库，创建页面的名称和私有可见性会预先填好，点 `Create repository` 即可。不必勾选 `Add a README`：完全空白的仓库没有默认分支，映格在连接时会用 `Contents: Read and write` 权限自动提交第一份 README 建立默认分支，用户不需要手动初始化仓库。之后在 GitHub 选择 `Only select repositories`，仅授权该私库。回到应用确认账号和库名，点「确认使用」即进入相册首页。
 
 映格默认不内置项目维护者的 GitHub App。自行创建 App 的步骤见下文；公开标识保存在本机，登录令牌另存于设备安全存储中。已有版本绑定的仓库和令牌不会因更新自动删除；需要重新授权时，请填写你自己的 GitHub App。
 

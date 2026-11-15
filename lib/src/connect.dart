@@ -49,6 +49,7 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
   DateTime? codeDeadline;
   Timer? codeTicker;
   bool busy = false;
+  String? progress;
   Json? tokens, user;
   List<Json>? repos;
 
@@ -315,14 +316,23 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
   }
 
   Future<void> bind(Json row) async {
-    final repo = await github.verify(row);
-    if (!mounted) return;
-    if (repo['full_name'] != row['full_name']) {
-      await list();
-      throw StateError('仓库名称已更新，请重新确认相册。');
+    setState(() => progress = '正在检查并准备相册仓库…');
+    try {
+      final repo = await github.verify(row);
+      if (!mounted) return;
+      if (repo['full_name'] != row['full_name']) {
+        await list();
+        throw StateError('仓库名称已更新，请重新确认相册。');
+      }
+      await widget.store.connect(repo, user!, tokens!, clientId);
+      if (mounted) {
+        setState(() => progress = null);
+        Navigator.pop(context, true);
+      }
+    } catch (e) {
+      if (mounted) setState(() => progress = null);
+      rethrow;
     }
-    await widget.store.connect(repo, user!, tokens!, clientId);
-    if (mounted) Navigator.pop(context, true);
   }
 
   Future<void> openGitHub(
@@ -662,10 +672,19 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
                       style: Theme.of(context).textTheme.headlineMedium,
                     ),
                     const Text(
-                      '在 GitHub 给仓库取个名字，选择 Private（私有），并开启 Add a README。建好后返回这里。',
+                      '名称和私有可见性已经替你填好（名称被占用就改一个）。'
+                      '点 Create repository 即可，不用勾选 Add a README，'
+                      '也不用手动初始化——映格连接时会自动建好第一份说明。',
                     ),
                     FilledButton(
-                      onPressed: () => openGitHub('/new'),
+                      onPressed: () => openGitHub(
+                        '/new',
+                        query: {
+                          'name': 'yingge-photos',
+                          'description': '映格照片相册（私有）',
+                          'visibility': 'private',
+                        },
+                      ),
                       child: const Text('前往 GitHub 创建私库'),
                     ),
                     OutlinedButton(
@@ -762,9 +781,18 @@ class _ConnectState extends State<ConnectPage> with WidgetsBindingObserver {
                     ),
                 ],
                 if (busy)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 18),
-                    child: LinearProgressIndicator(),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 18),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (progress != null) ...[
+                          Text(progress!),
+                          const SizedBox(height: 8),
+                        ],
+                        const LinearProgressIndicator(),
+                      ],
+                    ),
                   ),
                 if (error != null &&
                     !(configuring && setupStep == _SetupStep.details))
